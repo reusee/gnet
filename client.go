@@ -73,7 +73,7 @@ func NewClient(addr string, key string, conns int) (*Client, error) {
 
 func (self *Client) NewSession() *Session {
   id := uint64(rand.Int63())
-  session := newSession(id, self.connPool.sendDataChan)
+  session := newSession(id, self.connPool.sendDataChan, self.connPool.sendStateChan)
   self.connPool.sessions[id] = session
   return session
 }

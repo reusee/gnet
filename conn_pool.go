@@ -15,7 +15,8 @@ type ConnPool struct {
   byteKeys []byte
   uint64Keys []uint64
 
-  sendDataChan chan []byte
+  sendDataChan chan DataToSend
+  sendStateChan chan StateToSend
 
   sessions map[uint64]*Session
   newSessionChan chan *Session
@@ -24,7 +25,8 @@ type ConnPool struct {
 func newConnPool(key string, newSessionChan chan *Session) *ConnPool {
   self := &ConnPool{
     newConnChan: make(chan *net.TCPConn, CHAN_BUF_SIZE),
-    sendDataChan: make(chan []byte, CHAN_BUF_SIZE),
+    sendDataChan: make(chan DataToSend, CHAN_BUF_SIZE),
+    sendStateChan: make(chan StateToSend, CHAN_BUF_SIZE),
     sessions: make(map[uint64]*Session),
     newSessionChan: newSessionChan,
   }
@@ -45,18 +47,15 @@ func (self *ConnPool) start() {
 
 func (self *ConnPool) startConnWriter(conn *net.TCPConn) {
   keepAliveTicker := time.NewTicker(time.Second * 10)
+  var err error
   for {
     select {
     case data := <-self.sendDataChan:
-      //TODO dont send when session is close
-      l := len(data)
-      toSend := make([]byte, 1 + 4 + l)
-      toSend[0] = TYPE_DATA
-      packetLenBuf := new(bytes.Buffer)
-      binary.Write(packetLenBuf, binary.BigEndian, uint32(l))
-      copy(toSend[1:5], packetLenBuf.Bytes()[:4])
-      xorSlice(data, toSend[5:], l, l % 8, self.byteKeys, self.uint64Keys)
-      _, err := conn.Write(toSend)
+      if data.session.remoteReadState == ABORT {
+        continue
+      }
+      toSend := self.packData(data.data, TYPE_DATA)
+      _, err = conn.Write(toSend)
       if err != nil {
         if self.badConnChan != nil {
           self.badConnChan <- true
@@ -64,9 +63,22 @@ func (self *ConnPool) startConnWriter(conn *net.TCPConn) {
         self.sendDataChan <- data
         break
       }
+
+    case state := <-self.sendStateChan:
+      toSend := self.packData(state.data, TYPE_STATE)
+      _, err = conn.Write(toSend)
+      if err != nil {
+        if self.badConnChan != nil {
+          self.badConnChan <- true
+        }
+        self.sendStateChan <- state
+        break
+      }
+
     case <-keepAliveTicker.C:
       conn.Write([]byte{TYPE_PING})
     }
+
   }
 }
 
@@ -84,42 +96,84 @@ func (self *ConnPool) startConnReader(conn *net.TCPConn) {
     switch packetType {
 
     case TYPE_DATA:
-      var packetLen uint32
-      err := binary.Read(conn, binary.BigEndian, &packetLen)
+      sessionId, serial, data, err := self.unpackData(conn)
       if err != nil {
-        if self.badConnChan != nil {
-          self.badConnChan <- true
-        }
         break
       }
-
-      buf := make([]byte, packetLen)
-      _, err = io.ReadFull(conn, buf)
-      if err != nil {
-        if self.badConnChan != nil {
-          self.badConnChan <- true
-        }
-        break
-      }
-
-      decrypted := make([]byte, packetLen)
-      xorSlice(buf, decrypted, int(packetLen), int(packetLen) % 8, self.byteKeys, self.uint64Keys)
-      var sessionId uint64
-      binary.Read(bytes.NewReader(decrypted[:8]), binary.BigEndian, &sessionId)
-      var serial uint32
-      binary.Read(bytes.NewReader(decrypted[8:12]), binary.BigEndian, &serial)
-      data := decrypted[12:]
-
       session := self.sessions[sessionId]
       if session == nil { // create new session
-        session = newSession(sessionId, self.sendDataChan)
+        session = newSession(sessionId, self.sendDataChan, self.sendStateChan)
         self.sessions[sessionId] = session
         self.newSessionChan <- session
       }
-      //TODO don't send to closed session
-      session.incomingPacketChan <- Packet{serial: serial, data: data}
+      if session.remoteSendState == NORMAL {
+        session.incomingPacketChan <- Packet{serial: serial, data: data}
+      }
+
+    case TYPE_STATE: // state
+      sessionId, serial, data, err := self.unpackData(conn)
+      if err != nil {
+        break
+      }
+      session := self.sessions[sessionId]
+      if session == nil { // session not exists
+        continue
+      }
+      _ = serial
+      state := data[0]
+      switch state {
+      case STATE_FINISH_SEND:
+        //TODO use for session cleaning
+      case STATE_FINISH_READ:
+        //TODO use for session cleaning
+      case STATE_ABORT_SEND: // drop all received packet
+        session.remoteSendState = ABORT
+      case STATE_ABORT_READ: // drop all outgoing packet
+        session.remoteReadState = ABORT
+      }
 
     case TYPE_PING: // just a ping
     }
   }
+}
+
+func (self *ConnPool) packData(data []byte, dataType byte) []byte {
+  l := len(data)
+  pack := make([]byte, 1 + 4 + l)
+  pack[0] = dataType
+  dataLenBuf := new(bytes.Buffer)
+  binary.Write(dataLenBuf, binary.BigEndian, uint32(l))
+  copy(pack[1:5], dataLenBuf.Bytes()[:4])
+  xorSlice(data, pack[5:], l, l % 8, self.byteKeys, self.uint64Keys)
+  return pack
+}
+
+func (self *ConnPool) unpackData(conn *net.TCPConn) (uint64, uint32, []byte, error) {
+  var packetLen uint32
+  err := binary.Read(conn, binary.BigEndian, &packetLen)
+  if err != nil {
+    if self.badConnChan != nil {
+      self.badConnChan <- true
+    }
+    return 0, 0, nil, err
+  }
+
+  buf := make([]byte, packetLen)
+  _, err = io.ReadFull(conn, buf)
+  if err != nil {
+    if self.badConnChan != nil {
+      self.badConnChan <- true
+    }
+    return 0, 0, nil, err
+  }
+
+  decrypted := make([]byte, packetLen)
+  xorSlice(buf, decrypted, int(packetLen), int(packetLen) % 8, self.byteKeys, self.uint64Keys)
+  var sessionId uint64
+  binary.Read(bytes.NewReader(decrypted[:8]), binary.BigEndian, &sessionId)
+  var serial uint32
+  binary.Read(bytes.NewReader(decrypted[8:12]), binary.BigEndian, &serial)
+  data := decrypted[12:]
+
+  return sessionId, serial, data, nil
 }

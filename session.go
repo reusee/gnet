@@ -10,19 +10,43 @@ import (
 type Session struct {
   id uint64
   serial uint32
+
   incomingSerial uint32
-  sendDataChan chan []byte
   incomingPacketChan chan Packet
+  sendDataChan chan DataToSend
+  sendStateChan chan StateToSend
+
+  readState int
+  sendState int
+  remoteReadState int
+  remoteSendState int
 
   Data chan []byte
 }
 
-func newSession(id uint64, sendDataChan chan []byte) *Session {
+type DataToSend struct {
+  session *Session
+  data []byte
+}
+
+type StateToSend struct {
+  session *Session
+  data []byte
+}
+
+func newSession(id uint64, sendDataChan chan DataToSend, sendStateChan chan StateToSend) *Session {
   self := &Session{
     id: id,
     incomingSerial: 1,
-    sendDataChan: sendDataChan,
     incomingPacketChan: make(chan Packet, CHAN_BUF_SIZE),
+    sendDataChan: sendDataChan,
+    sendStateChan: sendStateChan,
+
+    readState: NORMAL,
+    sendState: NORMAL,
+    remoteReadState: NORMAL,
+    remoteSendState: NORMAL,
+
     Data: make(chan []byte, CHAN_BUF_SIZE),
   }
   go self.start()
@@ -61,11 +85,39 @@ func (self *Session) start() {
   }
 }
 
-func (self *Session) Send(data []byte) {
+func (self *Session) packData(data []byte) []byte {
   buf := new(bytes.Buffer)
   binary.Write(buf, binary.BigEndian, self.id) // session id
   serial := atomic.AddUint32(&self.serial, uint32(1))
   binary.Write(buf, binary.BigEndian, serial) // packet serial
   buf.Write(data) // data
-  self.sendDataChan <- buf.Bytes()
+  return buf.Bytes()
+}
+
+func (self *Session) Send(data []byte) int {
+  if self.remoteReadState == ABORT {
+    return ABORT
+  }
+  self.sendDataChan <- DataToSend{self, self.packData(data)}
+  return NORMAL
+}
+
+func (self *Session) FinishSend() { // no more data will be send
+  self.sendState = FINISH
+  self.sendStateChan <- StateToSend{self, self.packData([]byte{STATE_FINISH_SEND})}
+}
+
+func (self *Session) AbortSend() { // abort all pending data immediately
+  self.sendState = ABORT
+  self.sendStateChan <- StateToSend{self, self.packData([]byte{STATE_ABORT_SEND})}
+}
+
+func (self *Session) FinishRead() { // no more data will be read
+  self.readState = FINISH
+  self.sendStateChan <- StateToSend{self, self.packData([]byte{STATE_FINISH_READ})}
+}
+
+func (self *Session) AbortRead() { // stop reading immediately
+  self.readState = ABORT
+  self.sendStateChan <- StateToSend{self, self.packData([]byte{STATE_ABORT_READ})}
 }
