@@ -33,7 +33,7 @@ func NewClient(addr string, key string, conns int) (*Client, error) {
 
   go func() { // watch for bad conn
     c := make(chan bool, CHAN_BUF_SIZE)
-    self.connPool.badConn = c
+    self.connPool.badConnChan = c
     for {
       <-c
       retry := 5
@@ -43,7 +43,7 @@ func NewClient(addr string, key string, conns int) (*Client, error) {
           retry--
           continue
         }
-        self.connPool.newConn <- conn
+        self.connPool.newConnChan <- conn
         break
       }
     }
@@ -59,7 +59,7 @@ func NewClient(addr string, key string, conns int) (*Client, error) {
       if err != nil {
         hasError = true
       }
-      self.connPool.newConn <- conn
+      self.connPool.newConnChan <- conn
       wg.Done()
     }()
   }
@@ -73,7 +73,7 @@ func NewClient(addr string, key string, conns int) (*Client, error) {
 
 func (self *Client) NewSession() *Session {
   id := uint64(rand.Int63())
-  session := newSession(id, self.connPool.sendChan)
+  session := newSession(id, self.connPool.sendDataChan)
   self.connPool.sessions[id] = session
   return session
 }

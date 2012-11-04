@@ -9,13 +9,13 @@ import (
 )
 
 type ConnPool struct {
-  newConn chan *net.TCPConn
-  badConn chan bool
+  newConnChan chan *net.TCPConn
+  badConnChan chan bool
 
   byteKeys []byte
   uint64Keys []uint64
 
-  sendChan chan []byte
+  sendDataChan chan []byte
 
   sessions map[uint64]*Session
   newSessionChan chan *Session
@@ -23,8 +23,8 @@ type ConnPool struct {
 
 func newConnPool(key string, newSessionChan chan *Session) *ConnPool {
   self := &ConnPool{
-    newConn: make(chan *net.TCPConn, CHAN_BUF_SIZE),
-    sendChan: make(chan []byte, CHAN_BUF_SIZE),
+    newConnChan: make(chan *net.TCPConn, CHAN_BUF_SIZE),
+    sendDataChan: make(chan []byte, CHAN_BUF_SIZE),
     sessions: make(map[uint64]*Session),
     newSessionChan: newSessionChan,
   }
@@ -36,33 +36,32 @@ func newConnPool(key string, newSessionChan chan *Session) *ConnPool {
 func (self *ConnPool) start() {
   for {
     select {
-    case conn := <-self.newConn:
+    case conn := <-self.newConnChan:
       go self.startConnWriter(conn)
       go self.startConnReader(conn)
     }
   }
 }
 
-//TODO handle read and write error
-
 func (self *ConnPool) startConnWriter(conn *net.TCPConn) {
   keepAliveTicker := time.NewTicker(time.Second * 10)
   for {
     select {
-    case packet := <-self.sendChan:
-      l := len(packet)
+    case data := <-self.sendDataChan:
+      //TODO dont send when session is close
+      l := len(data)
       toSend := make([]byte, 1 + 4 + l)
       toSend[0] = TYPE_DATA
       packetLenBuf := new(bytes.Buffer)
       binary.Write(packetLenBuf, binary.BigEndian, uint32(l))
       copy(toSend[1:5], packetLenBuf.Bytes()[:4])
-      xorSlice(packet, toSend[5:], l, l % 8, self.byteKeys, self.uint64Keys)
+      xorSlice(data, toSend[5:], l, l % 8, self.byteKeys, self.uint64Keys)
       _, err := conn.Write(toSend)
       if err != nil {
-        if self.badConn != nil {
-          self.badConn <- true
+        if self.badConnChan != nil {
+          self.badConnChan <- true
         }
-        self.sendChan <- packet
+        self.sendDataChan <- data
         break
       }
     case <-keepAliveTicker.C:
@@ -76,8 +75,8 @@ func (self *ConnPool) startConnReader(conn *net.TCPConn) {
     var packetType byte
     err := binary.Read(conn, binary.BigEndian, &packetType)
     if err != nil {
-      if self.badConn != nil {
-        self.badConn <- true
+      if self.badConnChan != nil {
+        self.badConnChan <- true
       }
       break
     }
@@ -88,8 +87,8 @@ func (self *ConnPool) startConnReader(conn *net.TCPConn) {
       var packetLen uint32
       err := binary.Read(conn, binary.BigEndian, &packetLen)
       if err != nil {
-        if self.badConn != nil {
-          self.badConn <- true
+        if self.badConnChan != nil {
+          self.badConnChan <- true
         }
         break
       }
@@ -97,8 +96,8 @@ func (self *ConnPool) startConnReader(conn *net.TCPConn) {
       buf := make([]byte, packetLen)
       _, err = io.ReadFull(conn, buf)
       if err != nil {
-        if self.badConn != nil {
-          self.badConn <- true
+        if self.badConnChan != nil {
+          self.badConnChan <- true
         }
         break
       }
@@ -109,15 +108,16 @@ func (self *ConnPool) startConnReader(conn *net.TCPConn) {
       binary.Read(bytes.NewReader(decrypted[:8]), binary.BigEndian, &sessionId)
       var serial uint32
       binary.Read(bytes.NewReader(decrypted[8:12]), binary.BigEndian, &serial)
-      packet := decrypted[12:]
+      data := decrypted[12:]
 
       session := self.sessions[sessionId]
       if session == nil { // create new session
-        session = newSession(sessionId, self.sendChan)
+        session = newSession(sessionId, self.sendDataChan)
         self.sessions[sessionId] = session
         self.newSessionChan <- session
       }
-      session.packetChan <- Packet{serial: serial, packet: packet}
+      //TODO don't send to closed session
+      session.incomingPacketChan <- Packet{serial: serial, data: data}
 
     case TYPE_PING: // just a ping
     }

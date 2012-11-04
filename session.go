@@ -10,18 +10,19 @@ import (
 type Session struct {
   id uint64
   serial uint32
-  sendChan chan []byte
-  packetChan chan Packet
   incomingSerial uint32
+  sendDataChan chan []byte
+  incomingPacketChan chan Packet
+
   Data chan []byte
 }
 
-func newSession(id uint64, sendChan chan []byte) *Session {
+func newSession(id uint64, sendDataChan chan []byte) *Session {
   self := &Session{
     id: id,
-    sendChan: sendChan,
-    packetChan: make(chan Packet, CHAN_BUF_SIZE),
     incomingSerial: 1,
+    sendDataChan: sendDataChan,
+    incomingPacketChan: make(chan Packet, CHAN_BUF_SIZE),
     Data: make(chan []byte, CHAN_BUF_SIZE),
   }
   go self.start()
@@ -30,7 +31,7 @@ func newSession(id uint64, sendChan chan []byte) *Session {
 
 type Packet struct {
   serial uint32
-  packet []byte
+  data []byte
   index int
 }
 
@@ -38,9 +39,9 @@ func (self *Session) start() {
   packetQueue := make(PacketQueue, 0, 102400)
   for {
     select {
-    case packet := <-self.packetChan:
+    case packet := <-self.incomingPacketChan:
       if packet.serial == self.incomingSerial {
-        self.Data <- packet.packet
+        self.Data <- packet.data
         self.incomingSerial++
       } else {
         heap.Push(&packetQueue, &packet)
@@ -48,7 +49,7 @@ func (self *Session) start() {
       for len(packetQueue) > 0 {
         next := heap.Pop(&packetQueue).(*Packet)
         if next.serial == self.incomingSerial {
-          self.Data <- next.packet
+          self.Data <- next.data
           self.incomingSerial++
         } else {
           heap.Push(&packetQueue, next)
@@ -66,5 +67,5 @@ func (self *Session) Send(data []byte) {
   serial := atomic.AddUint32(&self.serial, uint32(1))
   binary.Write(buf, binary.BigEndian, serial) // packet serial
   buf.Write(data) // data
-  self.sendChan <- buf.Bytes()
+  self.sendDataChan <- buf.Bytes()
 }

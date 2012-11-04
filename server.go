@@ -43,6 +43,6 @@ func (self *Server) start(key string) {
     if self.connPools[host] == nil { // a new remote host
       self.connPools[host] = newConnPool(key, self.New)
     }
-    self.connPools[host].newConn <- conn
+    self.connPools[host].newConnChan <- conn
   }
 }
