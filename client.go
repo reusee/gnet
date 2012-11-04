@@ -31,6 +31,24 @@ func NewClient(addr string, key string, conns int) (*Client, error) {
     connPool: newConnPool(key, dumbChan),
   }
 
+  go func() { // watch for bad conn
+    c := make(chan bool, CHAN_BUF_SIZE)
+    self.connPool.badConn = c
+    for {
+      <-c
+      retry := 5
+      for retry > 0 {
+        conn, err := net.DialTCP("tcp", nil, raddr)
+        if err != nil {
+          retry--
+          continue
+        }
+        self.connPool.newConn <- conn
+        break
+      }
+    }
+  }()
+
   wg := new(sync.WaitGroup)
   wg.Add(conns)
   hasError := false

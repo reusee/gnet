@@ -23,6 +23,8 @@ func TestNew(t *testing.T) {
     session := client.NewSession()
     for i := 0; i < n; i++ {
       session.Send([]byte(fmt.Sprintf("%d", i)))
+      pong := <-session.Data
+      fmt.Printf("%s\n", pong)
     }
   }()
 
@@ -33,5 +35,7 @@ func TestNew(t *testing.T) {
     if bytes.Compare(data, expected) != 0 {
       t.Fatal("wrong seq")
     }
+    session.Send(data)
   }
+
 }

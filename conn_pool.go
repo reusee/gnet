@@ -9,6 +9,7 @@ import (
 
 type ConnPool struct {
   newConn chan *net.TCPConn
+  badConn chan bool
 
   byteKeys []byte
   uint64Keys []uint64
@@ -52,16 +53,34 @@ func (self *ConnPool) startConnWriter(conn *net.TCPConn) {
     binary.Write(packetLenBuf, binary.BigEndian, uint32(l))
     copy(toSend[:4], packetLenBuf.Bytes()[:4])
     xorSlice(packet, toSend[4:], l, l % 8, self.byteKeys, self.uint64Keys)
-    conn.Write(toSend)
+    _, err := conn.Write(toSend)
+    if err != nil {
+      if self.badConn != nil {
+        self.badConn <- true
+      }
+      break
+    }
   }
 }
 
 func (self *ConnPool) startConnReader(conn *net.TCPConn) {
   for {
     var packetLen uint32
-    binary.Read(conn, binary.BigEndian, &packetLen)
+    err := binary.Read(conn, binary.BigEndian, &packetLen)
+    if err != nil {
+      if self.badConn != nil {
+        self.badConn <- true
+      }
+      break
+    }
     buf := make([]byte, packetLen)
-    io.ReadFull(conn, buf)
+    _, err = io.ReadFull(conn, buf)
+    if err != nil {
+      if self.badConn != nil {
+        self.badConn <- true
+      }
+      break
+    }
     decrypted := make([]byte, packetLen)
     xorSlice(buf, decrypted, int(packetLen), int(packetLen) % 8, self.byteKeys, self.uint64Keys)
     var sessionId uint64
