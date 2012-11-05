@@ -17,6 +17,7 @@ func TestNew(t *testing.T) {
   if err != nil {
     t.Fatal(err)
   }
+  defer client.Close()
 
   n := 2000
 
@@ -52,6 +53,7 @@ func TestAbort(t *testing.T) {
   if err != nil {
     t.Fatal(err)
   }
+  defer client.Close()
 
   end := make(chan bool)
   go func() {

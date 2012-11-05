@@ -13,6 +13,8 @@ func init() {
 
 type Client struct {
   connPool *ConnPool
+
+  Close func()
 }
 
 func NewClient(addr string, key string, conns int) (*Client, error) {
@@ -22,32 +24,49 @@ func NewClient(addr string, key string, conns int) (*Client, error) {
   }
 
   dumbChan := make(chan *Session, CHAN_BUF_SIZE)
-  go func() {
+  endDumbChan := make(chan bool)
+  go func() { // newSessionChan
     for {
-      <-dumbChan
-    }
-  }()
-  self := &Client{
-    connPool: newConnPool(key, dumbChan),
-  }
-
-  go func() { // watch for bad conn
-    c := make(chan bool, CHAN_BUF_SIZE)
-    self.connPool.badConnChan = c
-    for {
-      <-c
-      retry := 5
-      for retry > 0 {
-        conn, err := net.DialTCP("tcp", nil, raddr)
-        if err != nil {
-          retry--
-          continue
-        }
-        self.connPool.newConnChan <- conn
+      select {
+      case <-dumbChan:
+      case <-endDumbChan:
         break
       }
     }
   }()
+
+  connPool := newConnPool(key, dumbChan)
+
+  endBadConnWatcher := make(chan bool)
+  go func() { // watch for bad conn
+    c := make(chan bool, CHAN_BUF_SIZE)
+    connPool.badConnChan = c
+    for {
+      select {
+      case <-c:
+        retry := 5
+        for retry > 0 {
+          conn, err := net.DialTCP("tcp", nil, raddr)
+          if err != nil {
+            retry--
+            continue
+          }
+          connPool.newConnChan <- conn
+          break
+        }
+      case <-endBadConnWatcher:
+        break
+      }
+    }
+  }()
+
+  self := &Client{
+    connPool: connPool,
+    Close: func() {
+      endDumbChan <- true
+      endBadConnWatcher <- true
+    },
+  }
 
   wg := new(sync.WaitGroup)
   wg.Add(conns)
