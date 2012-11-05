@@ -188,7 +188,7 @@ func (self *ConnPool) unpackData(conn *net.TCPConn) (uint64, uint32, []byte, err
     self.dealWithDeadConn(conn)
     return 0, 0, nil, err
   }
-  atomic.AddUint64(&self.bytesWrite, uint64(packetLen))
+  atomic.AddUint64(&self.bytesRead, uint64(packetLen))
 
   buf := make([]byte, packetLen)
   _, err = io.ReadFull(conn, buf)
