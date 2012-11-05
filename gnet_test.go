@@ -11,6 +11,7 @@ func TestNew(t *testing.T) {
   if err != nil {
     t.Fatal(err)
   }
+  defer server.Close()
 
   client, err := NewClient("localhost:8888", "abcd", 4)
   if err != nil {
@@ -45,6 +46,7 @@ func TestAbort(t *testing.T) {
   if err != nil {
     t.Fatal(err)
   }
+  defer server.Close()
 
   client, err := NewClient("localhost:8889", "abcd", 4)
   if err != nil {

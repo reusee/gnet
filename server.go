@@ -6,6 +6,7 @@ import (
 
 type Server struct {
   ln *net.TCPListener
+  closed bool
 
   connPools map[string]*ConnPool
 
@@ -36,6 +37,9 @@ func (self *Server) start(key string) {
   for { // listen for incoming connection
     conn, err := self.ln.AcceptTCP()
     if err != nil {
+      if self.closed {
+        break
+      }
       continue
     }
     raddr := conn.RemoteAddr().String()
@@ -45,4 +49,9 @@ func (self *Server) start(key string) {
     }
     self.connPools[host].newConnChan <- conn
   }
+}
+
+func (self *Server) Close() {
+  self.closed = true
+  self.ln.Close()
 }
