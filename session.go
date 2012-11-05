@@ -65,7 +65,7 @@ type Packet struct {
 }
 
 func (self *Session) start() {
-  packetQueue := make(PacketQueue, 0, CHAN_BUF_SIZE)
+  packetQueue := newPacketQueue()
   for {
     select {
     case packet := <-self.incomingPacketChan:

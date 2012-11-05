@@ -1,6 +1,16 @@
 package gnet
 
+import (
+  "container/heap"
+)
+
 type PacketQueue []*Packet
+
+func newPacketQueue() PacketQueue {
+  packetQueue := make(PacketQueue, 0, CHAN_BUF_SIZE)
+  heap.Init(&packetQueue)
+  return packetQueue
+}
 
 func (self PacketQueue) Len() int {
   return len(self)
@@ -17,20 +27,16 @@ func (self PacketQueue) Swap(i, j int) {
 }
 
 func (self *PacketQueue) Push(x interface{}) {
-  a := *self
-  n := len(a)
-  a = a[0 : n + 1]
   item := x.(*Packet)
-  item.index = n
-  a[n] = item
-  *self = a
+  item.index = len(*self)
+  newSlice := append(*self, item)
+  *self = newSlice
 }
 
 func (self *PacketQueue) Pop() interface{} {
-  a := *self
-  n := len(a)
-  item := a[n - 1]
+  item := (*self)[len(*self) - 1]
   item.index = -1
-  *self = a[0 : n - 1]
+  newSlice := (*self)[:len(*self) - 1]
+  *self = newSlice
   return item
 }
