@@ -62,6 +62,7 @@ func (self *ConnPool) startConnWriter(conn *net.TCPConn) {
         if self.badConn != nil {
           self.badConn <- true
         }
+        self.sendChan <- packet
         break
       }
     case <-keepAliveTicker.C:
