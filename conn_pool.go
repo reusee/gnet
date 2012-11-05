@@ -6,6 +6,7 @@ import (
   "encoding/binary"
   "io"
   "time"
+  "sync/atomic"
 )
 
 type ConnPool struct {
@@ -22,6 +23,9 @@ type ConnPool struct {
   newSessionChan chan *Session
 
   endChan chan bool
+
+  bytesRead uint64
+  bytesWrite uint64
 }
 
 func newConnPool(key string, newSessionChan chan *Session) *ConnPool {
@@ -39,6 +43,8 @@ func newConnPool(key string, newSessionChan chan *Session) *ConnPool {
 }
 
 func (self *ConnPool) start() {
+  ticker := time.NewTicker(time.Second * 3)
+  var bytesWrite, bytesRead uint64
   for {
     select {
     case conn := <-self.newConnChan:
@@ -49,6 +55,13 @@ func (self *ConnPool) start() {
 
     case <-self.endChan:
       break
+
+    case <-ticker.C:
+      curBytesRead, curBytesWrite := self.bytesRead, self.bytesWrite
+      self.log("read %d / %d write %d / %d",
+        curBytesRead - bytesRead, curBytesRead,
+        curBytesWrite - bytesWrite, curBytesWrite)
+      bytesWrite, bytesRead = curBytesWrite, curBytesRead
     }
   }
 }
@@ -70,7 +83,6 @@ func (self *ConnPool) startConnWriter(conn *net.TCPConn) {
   for {
     select {
     case data := <-self.sendDataChan:
-      self.log("start sending data\n")
       if data.session.remoteReadState == ABORT {
         continue
       }
@@ -81,9 +93,9 @@ func (self *ConnPool) startConnWriter(conn *net.TCPConn) {
         self.sendDataChan <- data
         return
       }
+      atomic.AddUint64(&self.bytesWrite, uint64(len(toSend)))
 
     case state := <-self.sendStateChan:
-      self.log("start sending state\n")
       toSend := self.packData(state.data, TYPE_STATE)
       _, err = conn.Write(toSend)
       if err != nil {
@@ -91,14 +103,15 @@ func (self *ConnPool) startConnWriter(conn *net.TCPConn) {
         self.sendStateChan <- state
         return
       }
+      atomic.AddUint64(&self.bytesWrite, uint64(len(toSend)))
 
     case <-keepAliveTicker.C:
-      self.log("start sending heartbeat\n")
       _, err := conn.Write([]byte{TYPE_PING})
       if err != nil {
         self.dealWithDeadConn(conn)
         return
       }
+      atomic.AddUint64(&self.bytesWrite, uint64(1))
     }
 
   }
@@ -106,7 +119,6 @@ func (self *ConnPool) startConnWriter(conn *net.TCPConn) {
 
 func (self *ConnPool) startConnReader(conn *net.TCPConn) {
   for {
-    self.log("start reading packet\n")
     var packetType byte
     err := binary.Read(conn, binary.BigEndian, &packetType)
     if err != nil {
@@ -176,6 +188,7 @@ func (self *ConnPool) unpackData(conn *net.TCPConn) (uint64, uint32, []byte, err
     self.dealWithDeadConn(conn)
     return 0, 0, nil, err
   }
+  atomic.AddUint64(&self.bytesWrite, uint64(packetLen))
 
   buf := make([]byte, packetLen)
   _, err = io.ReadFull(conn, buf)

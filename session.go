@@ -69,7 +69,6 @@ func (self *Session) start() {
   for {
     select {
     case packet := <-self.incomingPacketChan:
-      self.log("received packet\n")
       if packet.serial == self.incomingSerial {
         self.Data <- packet.data
         self.incomingSerial++
