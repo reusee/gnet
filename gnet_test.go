@@ -28,7 +28,7 @@ func TestNew(t *testing.T) {
       pong := <-session.Data
       fmt.Printf("%s\n", pong)
     }
-    session.FinishSend()
+    session.Close()
   }()
 
   session := <-server.New
@@ -40,6 +40,7 @@ func TestNew(t *testing.T) {
     }
     session.Send(data)
   }
+  session.Close()
 }
 
 func TestAbort(t *testing.T) {
@@ -58,6 +59,7 @@ func TestAbort(t *testing.T) {
   end := make(chan bool)
   go func() {
     session := client.NewSession()
+    defer session.Close()
     for {
       if session.Send([]byte("hello")) == ABORT {
         break
@@ -78,4 +80,5 @@ func TestAbort(t *testing.T) {
     }
   }
   <-end
+  session.Close()
 }

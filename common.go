@@ -2,6 +2,7 @@ package gnet
 
 import (
   "fmt"
+  "time"
 )
 
 const (
@@ -19,6 +20,8 @@ const (
   NORMAL = iota
   FINISH
   ABORT
+
+  IDLE_TIME_BEFORE_SESSION_CLOSE = time.Minute * 30
 )
 
 func p(f string, vars ...interface{}) {

@@ -5,21 +5,24 @@ import (
   "encoding/binary"
   "sync/atomic"
   "container/heap"
+  "time"
 )
 
 type Session struct {
   id uint64
   serial uint32
+  endChan chan bool
+  closed bool
 
   incomingSerial uint32
   incomingPacketChan chan Packet
   sendDataChan chan DataToSend
   sendStateChan chan StateToSend
 
-  readState int
-  sendState int
-  remoteReadState int
-  remoteSendState int
+  readState int // for session cleaner
+  sendState int // for session cleaner
+  remoteReadState int // for Send() and conn writer
+  remoteSendState int // for incomingPacketChan and conn reader
 
   Data chan []byte
 }
@@ -37,6 +40,8 @@ type StateToSend struct {
 func newSession(id uint64, sendDataChan chan DataToSend, sendStateChan chan StateToSend) *Session {
   self := &Session{
     id: id,
+    endChan: make(chan bool, 32), // may be multiple push
+
     incomingSerial: 1,
     incomingPacketChan: make(chan Packet, CHAN_BUF_SIZE),
     sendDataChan: sendDataChan,
@@ -60,7 +65,7 @@ type Packet struct {
 }
 
 func (self *Session) start() {
-  packetQueue := make(PacketQueue, 0, 102400)
+  packetQueue := make(PacketQueue, 0, CHAN_BUF_SIZE)
   for {
     select {
     case packet := <-self.incomingPacketChan:
@@ -81,6 +86,11 @@ func (self *Session) start() {
         }
       }
 
+    case <-self.endChan:
+      break
+
+    case <-time.NewTimer(IDLE_TIME_BEFORE_SESSION_CLOSE).C:
+      self.Close()
     }
   }
 }
@@ -120,4 +130,18 @@ func (self *Session) FinishRead() { // no more data will be read
 func (self *Session) AbortRead() { // stop reading immediately
   self.readState = ABORT
   self.sendStateChan <- StateToSend{self, self.packData([]byte{STATE_ABORT_READ})}
+}
+
+func (self *Session) Close() {
+  self.FinishRead()
+  self.FinishSend()
+  self.endChan <- true
+  self.closed = true
+}
+
+func (self *Session) Abort() {
+  self.AbortSend()
+  self.AbortRead()
+  self.endChan <- true
+  self.closed = true
 }

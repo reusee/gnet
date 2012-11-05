@@ -116,7 +116,7 @@ func (self *ConnPool) startConnReader(conn *net.TCPConn) {
         break
       }
       session := self.sessions[sessionId]
-      if session == nil { // session not exists
+      if session == nil || session.closed { // ignore this packet
         continue
       }
       _ = serial
