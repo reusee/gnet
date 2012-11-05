@@ -58,7 +58,7 @@ func (self *ConnPool) start() {
 
     case <-ticker.C:
       curBytesRead, curBytesWrite := self.bytesRead, self.bytesWrite
-      self.log("read %d / %d write %d / %d",
+      self.log("read %d / %d write %d / %d\n",
         curBytesRead - bytesRead, curBytesRead,
         curBytesWrite - bytesWrite, curBytesWrite)
       bytesWrite, bytesRead = curBytesWrite, curBytesRead
