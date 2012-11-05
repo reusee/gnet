@@ -64,6 +64,7 @@ func (self *Session) start() {
   for {
     select {
     case packet := <-self.incomingPacketChan:
+      self.log("received packet\n")
       if packet.serial == self.incomingSerial {
         self.Data <- packet.data
         self.incomingSerial++
@@ -120,4 +121,8 @@ func (self *Session) FinishRead() { // no more data will be read
 func (self *Session) AbortRead() { // stop reading immediately
   self.readState = ABORT
   self.sendStateChan <- StateToSend{self, self.packData([]byte{STATE_ABORT_READ})}
+}
+
+func (self *Session) log(f string, vars ...interface{}) {
+  p(ps("SESSION %d %s", self.id, f), vars...)
 }

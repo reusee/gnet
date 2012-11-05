@@ -41,6 +41,7 @@ func (self *ConnPool) start() {
     case conn := <-self.newConnChan:
       go self.startConnWriter(conn)
       go self.startConnReader(conn)
+      self.log("new conn watchers started\n")
     }
   }
 }
@@ -51,6 +52,7 @@ func (self *ConnPool) startConnWriter(conn *net.TCPConn) {
   for {
     select {
     case data := <-self.sendDataChan:
+      self.log("start sending data\n")
       if data.session.remoteReadState == ABORT {
         continue
       }
@@ -60,23 +62,34 @@ func (self *ConnPool) startConnWriter(conn *net.TCPConn) {
         if self.badConnChan != nil {
           self.badConnChan <- true
         }
+        conn.Close()
         self.sendDataChan <- data
-        break
+        return
       }
 
     case state := <-self.sendStateChan:
+      self.log("start sending state\n")
       toSend := self.packData(state.data, TYPE_STATE)
       _, err = conn.Write(toSend)
       if err != nil {
         if self.badConnChan != nil {
           self.badConnChan <- true
         }
+        conn.Close()
         self.sendStateChan <- state
-        break
+        return
       }
 
     case <-keepAliveTicker.C:
-      conn.Write([]byte{TYPE_PING})
+      self.log("start sending heartbeat\n")
+      _, err := conn.Write([]byte{TYPE_PING})
+      if err != nil {
+        if self.badConnChan != nil {
+          self.badConnChan <- true
+        }
+        conn.Close()
+        return
+      }
     }
 
   }
@@ -84,13 +97,15 @@ func (self *ConnPool) startConnWriter(conn *net.TCPConn) {
 
 func (self *ConnPool) startConnReader(conn *net.TCPConn) {
   for {
+    self.log("start reading packet\n")
     var packetType byte
     err := binary.Read(conn, binary.BigEndian, &packetType)
     if err != nil {
       if self.badConnChan != nil {
         self.badConnChan <- true
       }
-      break
+      conn.Close()
+      return
     }
 
     switch packetType {
@@ -98,7 +113,7 @@ func (self *ConnPool) startConnReader(conn *net.TCPConn) {
     case TYPE_DATA:
       sessionId, serial, data, err := self.unpackData(conn)
       if err != nil {
-        break
+        return
       }
       session := self.sessions[sessionId]
       if session == nil { // create new session
@@ -113,7 +128,7 @@ func (self *ConnPool) startConnReader(conn *net.TCPConn) {
     case TYPE_STATE: // state
       sessionId, serial, data, err := self.unpackData(conn)
       if err != nil {
-        break
+        return
       }
       session := self.sessions[sessionId]
       if session == nil { // session not exists
@@ -155,6 +170,7 @@ func (self *ConnPool) unpackData(conn *net.TCPConn) (uint64, uint32, []byte, err
     if self.badConnChan != nil {
       self.badConnChan <- true
     }
+    conn.Close()
     return 0, 0, nil, err
   }
 
@@ -164,6 +180,7 @@ func (self *ConnPool) unpackData(conn *net.TCPConn) (uint64, uint32, []byte, err
     if self.badConnChan != nil {
       self.badConnChan <- true
     }
+    conn.Close()
     return 0, 0, nil, err
   }
 
@@ -176,4 +193,8 @@ func (self *ConnPool) unpackData(conn *net.TCPConn) (uint64, uint32, []byte, err
   data := decrypted[12:]
 
   return sessionId, serial, data, nil
+}
+
+func (self *ConnPool) log(f string, vars ...interface{}) {
+  p("CONNPOOL " + f, vars...)
 }

@@ -24,3 +24,7 @@ const (
 func p(f string, vars ...interface{}) {
   fmt.Printf(f, vars...)
 }
+
+func ps(f string, vars ...interface{}) string {
+  return fmt.Sprintf(f, vars...)
+}

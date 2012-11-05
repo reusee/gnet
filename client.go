@@ -13,6 +13,8 @@ func init() {
 
 type Client struct {
   connPool *ConnPool
+  livingConns int
+  raddr *net.TCPAddr
 }
 
 func NewClient(addr string, key string, conns int) (*Client, error) {
@@ -29,6 +31,7 @@ func NewClient(addr string, key string, conns int) (*Client, error) {
   }()
   self := &Client{
     connPool: newConnPool(key, dumbChan),
+    raddr: raddr,
   }
 
   go func() { // watch for bad conn
@@ -36,39 +39,53 @@ func NewClient(addr string, key string, conns int) (*Client, error) {
     self.connPool.badConnChan = c
     for {
       <-c
-      retry := 5
-      for retry > 0 {
-        conn, err := net.DialTCP("tcp", nil, raddr)
-        if err != nil {
-          retry--
-          continue
-        }
-        self.connPool.newConnChan <- conn
-        break
+      self.log("a bad conn\n")
+      if self.livingConns > 0 {
+        self.livingConns--
       }
     }
   }()
 
-  wg := new(sync.WaitGroup)
-  wg.Add(conns)
-  hasError := false
-  for i := 0; i < conns; i++ {
-    go func() {
-      var conn *net.TCPConn
-      conn, err = net.DialTCP("tcp", nil, raddr)
-      if err != nil {
-        hasError = true
-      }
-      self.connPool.newConnChan <- conn
-      wg.Done()
-    }()
-  }
-  wg.Wait()
-  if hasError {
+  err = self.connect(conns)
+  if err != nil {
     return nil, err
   }
 
+  go func() {
+    ticker := time.NewTicker(time.Second * 5)
+    for {
+      <-ticker.C
+      self.log("living connections %d\n", self.livingConns)
+      if self.livingConns == 0 {
+        self.log("lost all connection to server\n")
+        time.Sleep(time.Second * 30)
+        self.connect(conns)
+      } else if self.livingConns < conns {
+        self.connect(conns - self.livingConns)
+      }
+    }
+  }()
+
   return self, nil
+}
+
+func (self *Client) connect(conns int) (err error) {
+  wg := new(sync.WaitGroup)
+  wg.Add(conns)
+  for i := 0; i < conns; i++ {
+    go func() {
+      defer wg.Done()
+      var conn *net.TCPConn
+      conn, err = net.DialTCP("tcp", nil, self.raddr)
+      if err != nil {
+        return
+      }
+      self.connPool.newConnChan <- conn
+      self.livingConns++
+    }()
+  }
+  wg.Wait()
+  return
 }
 
 func (self *Client) NewSession() *Session {
@@ -76,4 +93,8 @@ func (self *Client) NewSession() *Session {
   session := newSession(id, self.connPool.sendDataChan, self.connPool.sendStateChan)
   self.connPool.sessions[id] = session
   return session
+}
+
+func (self *Client) log(s string, vars ...interface{}) {
+  p("CLIENT " + s, vars...)
 }
