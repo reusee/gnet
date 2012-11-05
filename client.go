@@ -51,7 +51,7 @@ func NewClient(addr string, key string, conns int) (*Client, error) {
 
   go func() { // watch for bad conn
     c := make(chan bool, CHAN_BUF_SIZE)
-    connPool.badConnChan = c
+    connPool.deadConnChan = c
     for {
       select {
       case <-c:

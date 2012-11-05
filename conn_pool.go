@@ -10,7 +10,7 @@ import (
 
 type ConnPool struct {
   newConnChan chan *net.TCPConn
-  badConnChan chan bool
+  deadConnChan chan bool
 
   byteKeys []byte
   uint64Keys []uint64
@@ -57,6 +57,13 @@ func (self *ConnPool) Close() {
   self.endChan <- true
 }
 
+func (self *ConnPool) dealWithDeadConn(conn *net.TCPConn) {
+  if self.deadConnChan != nil {
+    self.deadConnChan <- true
+  }
+  conn.Close()
+}
+
 func (self *ConnPool) startConnWriter(conn *net.TCPConn) {
   keepAliveTicker := time.NewTicker(time.Second * 10)
   var err error
@@ -70,10 +77,7 @@ func (self *ConnPool) startConnWriter(conn *net.TCPConn) {
       toSend := self.packData(data.data, TYPE_DATA)
       _, err = conn.Write(toSend)
       if err != nil {
-        if self.badConnChan != nil {
-          self.badConnChan <- true
-        }
-        conn.Close()
+        self.dealWithDeadConn(conn)
         self.sendDataChan <- data
         return
       }
@@ -83,10 +87,7 @@ func (self *ConnPool) startConnWriter(conn *net.TCPConn) {
       toSend := self.packData(state.data, TYPE_STATE)
       _, err = conn.Write(toSend)
       if err != nil {
-        if self.badConnChan != nil {
-          self.badConnChan <- true
-        }
-        conn.Close()
+        self.dealWithDeadConn(conn)
         self.sendStateChan <- state
         return
       }
@@ -95,10 +96,7 @@ func (self *ConnPool) startConnWriter(conn *net.TCPConn) {
       self.log("start sending heartbeat\n")
       _, err := conn.Write([]byte{TYPE_PING})
       if err != nil {
-        if self.badConnChan != nil {
-          self.badConnChan <- true
-        }
-        conn.Close()
+        self.dealWithDeadConn(conn)
         return
       }
     }
@@ -112,10 +110,7 @@ func (self *ConnPool) startConnReader(conn *net.TCPConn) {
     var packetType byte
     err := binary.Read(conn, binary.BigEndian, &packetType)
     if err != nil {
-      if self.badConnChan != nil {
-        self.badConnChan <- true
-      }
-      conn.Close()
+      self.dealWithDeadConn(conn)
       return
     }
 
@@ -178,20 +173,14 @@ func (self *ConnPool) unpackData(conn *net.TCPConn) (uint64, uint32, []byte, err
   var packetLen uint32
   err := binary.Read(conn, binary.BigEndian, &packetLen)
   if err != nil {
-    if self.badConnChan != nil {
-      self.badConnChan <- true
-    }
-    conn.Close()
+    self.dealWithDeadConn(conn)
     return 0, 0, nil, err
   }
 
   buf := make([]byte, packetLen)
   _, err = io.ReadFull(conn, buf)
   if err != nil {
-    if self.badConnChan != nil {
-      self.badConnChan <- true
-    }
-    conn.Close()
+    self.dealWithDeadConn(conn)
     return 0, 0, nil, err
   }
 
