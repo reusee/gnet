@@ -20,6 +20,8 @@ type ConnPool struct {
 
   sessions map[uint64]*Session
   newSessionChan chan *Session
+
+  endChan chan bool
 }
 
 func newConnPool(key string, newSessionChan chan *Session) *ConnPool {
@@ -29,6 +31,7 @@ func newConnPool(key string, newSessionChan chan *Session) *ConnPool {
     sendStateChan: make(chan StateToSend, CHAN_BUF_SIZE),
     sessions: make(map[uint64]*Session),
     newSessionChan: newSessionChan,
+    endChan: make(chan bool),
   }
   self.byteKeys, self.uint64Keys = calculateKeys(key)
   go self.start()
@@ -39,10 +42,18 @@ func (self *ConnPool) start() {
   for {
     select {
     case conn := <-self.newConnChan:
+      //TODO way to end these thread
       go self.startConnWriter(conn)
       go self.startConnReader(conn)
+
+    case <-self.endChan:
+      break
     }
   }
+}
+
+func (self *ConnPool) Close() {
+  self.endChan <- true
 }
 
 func (self *ConnPool) startConnWriter(conn *net.TCPConn) {

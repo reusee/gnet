@@ -52,6 +52,9 @@ func (self *Server) start(key string) {
 }
 
 func (self *Server) Close() {
-  self.closed = true
   self.ln.Close()
+  for _, connPool := range self.connPools {
+    connPool.Close()
+  }
+  self.closed = true
 }

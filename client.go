@@ -62,10 +62,11 @@ func NewClient(addr string, key string, conns int) (*Client, error) {
 
   self := &Client{
     connPool: connPool,
-    Close: func() {
-      endDumbChan <- true
-      endBadConnWatcher <- true
-    },
+  }
+  self.Close = func() {
+    endDumbChan <- true
+    endBadConnWatcher <- true
+    self.connPool.Close()
   }
 
   wg := new(sync.WaitGroup)
