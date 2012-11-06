@@ -11,10 +11,13 @@ import (
 type Session struct {
   id uint64
   serial uint32
-  endChan chan bool
   closed bool
 
+  stopReceive chan bool
+  stopHeartBeat chan bool
+
   incomingSerial uint32
+  maxIncomingSerial uint32
   incomingPacketChan chan Packet
   sendDataChan chan DataToSend
   sendStateChan chan StateToSend
@@ -40,7 +43,9 @@ type StateToSend struct {
 func newSession(id uint64, sendDataChan chan DataToSend, sendStateChan chan StateToSend) *Session {
   self := &Session{
     id: id,
-    endChan: make(chan bool, 32), // may be multiple push
+
+    stopReceive: make(chan bool, 32), // may be multiple push
+    stopHeartBeat: make(chan bool, 32),
 
     incomingSerial: 1,
     incomingPacketChan: make(chan Packet, CHAN_BUF_SIZE),
@@ -65,6 +70,22 @@ type Packet struct {
 }
 
 func (self *Session) start() {
+  go func() {
+    heartBeat := time.NewTicker(time.Second * 3)
+    for {
+      select {
+      case <-heartBeat.C:
+        cur, max := self.incomingSerial, self.maxIncomingSerial
+        if cur < max {
+          self.log("packet gap %d %d\n", cur, max)
+        }
+
+      case <-self.stopHeartBeat:
+        return
+      }
+    }
+  }()
+
   packetQueue := newPacketQueue()
   for {
     select {
@@ -72,8 +93,11 @@ func (self *Session) start() {
       if packet.serial == self.incomingSerial {
         self.Data <- packet.data
         self.incomingSerial++
-      } else {
+      } else if packet.serial > self.incomingSerial {
         heap.Push(&packetQueue, &packet)
+      }
+      if packet.serial > self.maxIncomingSerial {
+        self.maxIncomingSerial = packet.serial
       }
       for len(packetQueue) > 0 {
         next := heap.Pop(&packetQueue).(*Packet)
@@ -86,7 +110,7 @@ func (self *Session) start() {
         }
       }
 
-    case <-self.endChan:
+    case <-self.stopReceive:
       break
 
     case <-time.NewTimer(IDLE_TIME_BEFORE_SESSION_CLOSE).C:
@@ -135,14 +159,16 @@ func (self *Session) AbortRead() { // stop reading immediately
 func (self *Session) Close() {
   self.FinishRead()
   self.FinishSend()
-  self.endChan <- true
+  self.stopReceive <- true
+  self.stopHeartBeat <- true
   self.closed = true
 }
 
 func (self *Session) Abort() {
   self.AbortSend()
   self.AbortRead()
-  self.endChan <- true
+  self.stopReceive <- true
+  self.stopHeartBeat <- true
   self.closed = true
 }
 
