@@ -27,6 +27,8 @@ type Session struct {
   remoteReadState int // for Send() and conn writer
   remoteSendState int // for incomingPacketChan and conn reader
 
+  incomingPacketCount uint32
+
   Data chan []byte
 }
 
@@ -75,9 +77,9 @@ func (self *Session) start() {
     for {
       select {
       case <-heartBeat.C:
-        cur, max := self.incomingSerial, self.maxIncomingSerial
+        cur, max, count := self.incomingSerial, self.maxIncomingSerial, self.incomingPacketCount
         if cur < max {
-          self.log("packet gap %d %d\n", cur, max)
+          self.log("packet gap %d %d %d\n", cur, max, count)
         }
 
       case <-self.stopHeartBeat:
@@ -90,6 +92,7 @@ func (self *Session) start() {
   for {
     select {
     case packet := <-self.incomingPacketChan:
+      self.incomingPacketCount++
       if packet.serial == self.incomingSerial {
         self.Data <- packet.data
         self.incomingSerial++
