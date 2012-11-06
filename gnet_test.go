@@ -25,8 +25,7 @@ func TestNew(t *testing.T) {
     session := client.NewSession()
     for i := 0; i < n; i++ {
       session.Send([]byte(fmt.Sprintf("%d", i)))
-      pong := <-session.Data
-      fmt.Printf("%s\n", pong)
+      <-session.Data
     }
     session.Close()
   }()
@@ -43,42 +42,93 @@ func TestNew(t *testing.T) {
   session.Close()
 }
 
-func TestAbort(t *testing.T) {
-  server, err := NewServer(":8889", "abcd")
+func TestSessionAbort(t *testing.T) {
+  server, err := NewServer(":8700", "abc")
   if err != nil {
     t.Fatal(err)
   }
-  defer server.Close()
-
-  client, err := NewClient("localhost:8889", "abcd", 4)
+  client, err := NewClient("localhost:8700", "abc", 8)
   if err != nil {
     t.Fatal(err)
   }
-  defer client.Close()
 
-  end := make(chan bool)
   go func() {
-    session := client.NewSession()
-    defer session.Close()
+    session := <-server.New
     for {
-      if session.Send([]byte("hello")) == ABORT {
-        break
+      select {
+      case data := <-session.Data:
+        p("%s ", data)
+        session.Send(data)
+      case state := <-session.State:
+        if state == STATE_ABORT_SEND {
+          fmt.Printf("client abort send. quit\n")
+          session.AbortRead()
+          return
+        }
       }
     }
-    end <- true
   }()
 
-  session := <-server.New
-  n := 0
-  for {
-    data := <-session.Data
-    fmt.Printf("%s\n", data)
-    n++
-    if n > 5 {
-      session.AbortRead()
-      break
+  session := client.NewSession()
+  for i := 0; i < 200; i++ {
+    session.Send([]byte(fmt.Sprintf("%d", i)))
+  }
+  session.AbortSend()
+  var data []byte
+  LOOP: for {
+    select {
+    case data = <-session.Data:
+    case state := <-session.State:
+      if state == STATE_ABORT_READ {
+        fmt.Printf("server abort read. quit. last echo %s\n", data)
+        break LOOP
+      }
     }
   }
-  <-end
-  session.Close()
+}
+
+func TestSessionFinish(t *testing.T) {
+  server, err := NewServer(":8710", "abc")
+  if err != nil {
+    t.Fatal(err)
+  }
+  client, err := NewClient("localhost:8710", "abc", 8)
+  if err != nil {
+    t.Fatal(err)
+  }
+
+  go func() {
+    session := <-server.New
+    for {
+      select {
+      case data := <-session.Data:
+        p("%s ", data)
+        session.Send(data)
+      case state := <-session.State:
+        if state == STATE_FINISH_SEND {
+          fmt.Printf("client finish send. quit\n")
+          session.FinishRead()
+          return
+        }
+      }
+    }
+  }()
+
+  session := client.NewSession()
+  for i := 0; i < 200; i++ {
+    data := []byte(fmt.Sprintf("%d", i))
+    session.Send(data)
+  }
+  session.FinishSend()
+  var data []byte
+  LOOP: for {
+    select {
+    case data = <-session.Data:
+    case state := <-session.State:
+      if state == STATE_FINISH_READ {
+        fmt.Printf("server finish read. quit. last echo %s\n", data)
+        break LOOP
+      }
+    }
+  }
 }
