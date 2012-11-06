@@ -109,7 +109,7 @@ func (self *Client) connect(conns int) (err error) {
 
 func (self *Client) NewSession() *Session {
   id := uint64(rand.Int63())
-  session := newSession(id, self.connPool.sendDataChan, self.connPool.sendStateChan)
+  session := newSession(id, self.connPool.sendChan)
   self.connPool.sessions[id] = session
   return session
 }

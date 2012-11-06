@@ -8,9 +8,12 @@ import (
 const (
   CHAN_BUF_SIZE = 2 ^ 19
 
-  TYPE_PING = byte(0)
-  TYPE_DATA = byte(1)
-  TYPE_STATE = byte(2)
+  PACKET_TYPE_SESSION = byte(0)
+  PACKET_TYPE_PING = byte(1)
+
+  SESSION_PACKET_TYPE_DATA = byte(0)
+  SESSION_PACKET_TYPE_STATE = byte(1)
+  SESSION_PACKET_TYPE_INFO = byte(2)
 
   STATE_FINISH_SEND = byte(0)
   STATE_ABORT_SEND = byte(1)

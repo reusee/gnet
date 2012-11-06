@@ -16,8 +16,7 @@ type ConnPool struct {
   byteKeys []byte
   uint64Keys []uint64
 
-  sendDataChan chan DataToSend
-  sendStateChan chan StateToSend
+  sendChan chan ToSend
 
   sessions map[uint64]*Session
   newSessionChan chan *Session
@@ -31,8 +30,7 @@ type ConnPool struct {
 func newConnPool(key string, newSessionChan chan *Session) *ConnPool {
   self := &ConnPool{
     newConnChan: make(chan *net.TCPConn, CHAN_BUF_SIZE),
-    sendDataChan: make(chan DataToSend, CHAN_BUF_SIZE),
-    sendStateChan: make(chan StateToSend, CHAN_BUF_SIZE),
+    sendChan: make(chan ToSend, CHAN_BUF_SIZE),
     sessions: make(map[uint64]*Session),
     newSessionChan: newSessionChan,
     endChan: make(chan bool),
@@ -82,31 +80,21 @@ func (self *ConnPool) startConnWriter(conn *net.TCPConn) {
   var err error
   for {
     select {
-    case data := <-self.sendDataChan:
+    case data := <-self.sendChan:
       if data.session.remoteReadState == ABORT {
         continue
       }
-      toSend := self.packData(data.data, TYPE_DATA)
+      toSend := self.packSessionPacket(data.data)
       _, err = conn.Write(toSend)
       if err != nil {
         self.dealWithDeadConn(conn)
-        self.sendDataChan <- data
-        return
-      }
-      atomic.AddUint64(&self.bytesWrite, uint64(len(toSend)))
-
-    case state := <-self.sendStateChan:
-      toSend := self.packData(state.data, TYPE_STATE)
-      _, err = conn.Write(toSend)
-      if err != nil {
-        self.dealWithDeadConn(conn)
-        self.sendStateChan <- state
+        self.sendChan <- data
         return
       }
       atomic.AddUint64(&self.bytesWrite, uint64(len(toSend)))
 
     case <-keepAliveTicker.C:
-      _, err := conn.Write([]byte{TYPE_PING})
+      _, err := conn.Write([]byte{PACKET_TYPE_PING})
       if err != nil {
         self.dealWithDeadConn(conn)
         return
@@ -128,69 +116,59 @@ func (self *ConnPool) startConnReader(conn *net.TCPConn) {
 
     switch packetType {
 
-    case TYPE_DATA:
-      data, err := self.unpackData(conn)
+    case PACKET_TYPE_SESSION:
+      payload, sessionId, err := self.unpackSessionPacket(conn)
       if err != nil {
+        self.dealWithDeadConn(conn)
         return
       }
-      sessionId, serial, data := sessionUnpackData(data)
       session := self.sessions[sessionId]
       if session == nil { // create new session
-        session = newSession(sessionId, self.sendDataChan, self.sendStateChan)
+        session = newSession(sessionId, self.sendChan)
         self.sessions[sessionId] = session
         self.newSessionChan <- session
       }
-      if session.remoteSendState == NORMAL {
-        session.incomingPacketChan <- Packet{serial: serial, data: data}
-      }
+      session.incomingChan <- payload
 
-    case TYPE_STATE: // state
-      data, err := self.unpackData(conn)
-      if err != nil {
-        return
-      }
-      sessionId, state := sessionUnpackState(data)
-      session := self.sessions[sessionId]
-      if session == nil || session.closed { // ignore this packet
-        continue
-      }
-      session.incomingStateChan <- state
-
-    case TYPE_PING: // just a ping
+    case PACKET_TYPE_PING:
     }
   }
 }
 
-func (self *ConnPool) packData(data []byte, dataType byte) []byte {
-  l := len(data)
-  pack := make([]byte, 1 + 4 + l)
-  pack[0] = dataType
+func (self *ConnPool) packSessionPacket(data []byte) []byte {
+  dataLen := len(data)
+  pack := make([]byte, 1 + 4 + dataLen)
+  pack[0] = PACKET_TYPE_SESSION // packet type
   dataLenBuf := new(bytes.Buffer)
-  binary.Write(dataLenBuf, binary.BigEndian, uint32(l))
-  copy(pack[1:5], dataLenBuf.Bytes()[:4])
-  xorSlice(data, pack[5:], l, l % 8, self.byteKeys, self.uint64Keys)
+  binary.Write(dataLenBuf, binary.BigEndian, uint32(dataLen))
+  copy(pack[1:5], dataLenBuf.Bytes()[:4]) // session payload len
+  xorSlice(data, pack[5:], dataLen, dataLen % 8, self.byteKeys, self.uint64Keys)
   return pack
 }
 
-func (self *ConnPool) unpackData(conn *net.TCPConn) ([]byte, error) {
-  var packetLen uint32
-  err := binary.Read(conn, binary.BigEndian, &packetLen)
+func (self *ConnPool) unpackSessionPacket(conn *net.TCPConn) ([]byte, uint64, error) {
+  var payloadLen uint32
+  var sessionId uint64
+  err := binary.Read(conn, binary.BigEndian, &payloadLen)
   if err != nil {
     self.dealWithDeadConn(conn)
-    return nil, err
+    return nil, 0, err
   }
-  atomic.AddUint64(&self.bytesRead, uint64(packetLen))
+  atomic.AddUint64(&self.bytesRead, uint64(payloadLen))
 
-  buf := make([]byte, packetLen)
-  _, err = io.ReadFull(conn, buf)
+  encrypted := make([]byte, payloadLen)
+  _, err = io.ReadFull(conn, encrypted)
   if err != nil {
     self.dealWithDeadConn(conn)
-    return nil, err
+    return nil, 0, err
   }
 
-  decrypted := make([]byte, packetLen)
-  xorSlice(buf, decrypted, int(packetLen), int(packetLen) % 8, self.byteKeys, self.uint64Keys)
-  return decrypted, nil
+  payload := make([]byte, payloadLen)
+  xorSlice(encrypted, payload, int(payloadLen), int(payloadLen) % 8, self.byteKeys, self.uint64Keys)
+
+  binary.Read(bytes.NewReader(payload[:8]), binary.BigEndian, &sessionId)
+  payload = payload[8:]
+  return payload, sessionId, nil
 }
 
 func (self *ConnPool) log(f string, vars ...interface{}) {
