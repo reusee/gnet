@@ -19,6 +19,7 @@ type Session struct {
   incomingSerial uint32
   maxIncomingSerial uint32
   incomingPacketChan chan Packet
+  incomingStateChan chan byte
   sendDataChan chan DataToSend
   sendStateChan chan StateToSend
 
@@ -51,6 +52,7 @@ func newSession(id uint64, sendDataChan chan DataToSend, sendStateChan chan Stat
 
     incomingSerial: 1,
     incomingPacketChan: make(chan Packet, CHAN_BUF_SIZE),
+    incomingStateChan: make(chan byte, CHAN_BUF_SIZE),
     sendDataChan: sendDataChan,
     sendStateChan: sendStateChan,
 
@@ -72,7 +74,7 @@ type Packet struct {
 }
 
 func (self *Session) start() {
-  go func() {
+  go func() { // heart beat
     heartBeat := time.NewTicker(time.Second * 3)
     for {
       select {
@@ -89,7 +91,7 @@ func (self *Session) start() {
   }()
 
   packetQueue := newPacketQueue()
-  for {
+  for { // receive incoming packet
     select {
     case packet := <-self.incomingPacketChan:
       self.incomingPacketCount++
@@ -113,6 +115,18 @@ func (self *Session) start() {
         }
       }
 
+    case state := <-self.incomingStateChan:
+      switch state {
+      case STATE_FINISH_SEND:
+        //TODO use for session cleaning
+      case STATE_FINISH_READ:
+        //TODO use for session cleaning
+      case STATE_ABORT_SEND: // drop all received packet
+        self.remoteSendState = ABORT
+      case STATE_ABORT_READ: // drop all outgoing packet
+        self.remoteReadState = ABORT
+      }
+
     case <-self.stopReceive:
       break
 
@@ -131,6 +145,29 @@ func (self *Session) packData(data []byte) []byte {
   return buf.Bytes()
 }
 
+func sessionUnpackData(data []byte) (uint64, uint32, []byte) {
+  var sessionId uint64
+  binary.Read(bytes.NewReader(data[:8]), binary.BigEndian, &sessionId)
+  var serial uint32
+  binary.Read(bytes.NewReader(data[8:12]), binary.BigEndian, &serial)
+  data = data[12:]
+  return sessionId, serial, data
+}
+
+func (self *Session) packState(state byte) []byte {
+  buf := new(bytes.Buffer)
+  binary.Write(buf, binary.BigEndian, self.id)
+  buf.Write([]byte{state})
+  return buf.Bytes()
+}
+
+func sessionUnpackState(data []byte) (uint64, byte) {
+  var sessionId uint64
+  binary.Read(bytes.NewReader(data[:8]), binary.BigEndian, &sessionId)
+  state := data[8]
+  return sessionId, state
+}
+
 func (self *Session) Send(data []byte) int {
   if self.remoteReadState == ABORT {
     return ABORT
@@ -141,22 +178,22 @@ func (self *Session) Send(data []byte) int {
 
 func (self *Session) FinishSend() { // no more data will be send
   self.sendState = FINISH
-  self.sendStateChan <- StateToSend{self, self.packData([]byte{STATE_FINISH_SEND})}
+  self.sendStateChan <- StateToSend{self, self.packState(STATE_FINISH_SEND)}
 }
 
 func (self *Session) AbortSend() { // abort all pending data immediately
   self.sendState = ABORT
-  self.sendStateChan <- StateToSend{self, self.packData([]byte{STATE_ABORT_SEND})}
+  self.sendStateChan <- StateToSend{self, self.packState(STATE_ABORT_SEND)}
 }
 
 func (self *Session) FinishRead() { // no more data will be read
   self.readState = FINISH
-  self.sendStateChan <- StateToSend{self, self.packData([]byte{STATE_FINISH_READ})}
+  self.sendStateChan <- StateToSend{self, self.packState(STATE_FINISH_READ)}
 }
 
 func (self *Session) AbortRead() { // stop reading immediately
   self.readState = ABORT
-  self.sendStateChan <- StateToSend{self, self.packData([]byte{STATE_ABORT_READ})}
+  self.sendStateChan <- StateToSend{self, self.packState(STATE_ABORT_READ)}
 }
 
 func (self *Session) Close() {
