@@ -26,26 +26,27 @@ func NewClient(addr string, key string, conns int) (*Client, error) {
   }
 
   dumbChan := make(chan *Session, CHAN_BUF_SIZE)
-  endDumbChan := make(chan bool)
+  stopDumbChan := make(chan bool, 8)
   go func() { // newSessionChan
     for {
       select {
       case <-dumbChan:
-      case <-endDumbChan:
+      case <-stopDumbChan:
         break
       }
     }
   }()
 
   connPool := newConnPool(key, dumbChan)
-  endBadConnWatcher := make(chan bool)
+  stopBadConnWatcher := make(chan bool, 8)
+  stopHeartBeat := make(chan bool, 8)
   self := &Client{
     connPool: connPool,
     raddr: raddr,
   }
   self.Close = func() {
-    endDumbChan <- true
-    endBadConnWatcher <- true
+    stopDumbChan <- true
+    stopBadConnWatcher <- true
     self.connPool.Close()
   }
 
@@ -55,11 +56,10 @@ func NewClient(addr string, key string, conns int) (*Client, error) {
     for {
       select {
       case <-c:
-        self.log("a bad conn\n")
         if self.livingConns > 0 {
           self.livingConns--
         }
-      case <-endBadConnWatcher:
+      case <-stopBadConnWatcher:
         break
       }
     }
@@ -73,14 +73,21 @@ func NewClient(addr string, key string, conns int) (*Client, error) {
   go func() {
     heartBeat := time.NewTicker(time.Second * 5)
     for {
-      <-heartBeat.C
-      self.log("living connections %d\n", self.livingConns)
-      if self.livingConns == 0 {
-        self.log("lost all connection to server\n")
-        time.Sleep(time.Second * 30)
-        self.connect(conns)
-      } else if self.livingConns < conns {
-        self.connect(conns - self.livingConns)
+      select {
+      case <-heartBeat.C:
+
+        self.log("living connections %d\n", self.livingConns)
+        if self.livingConns == 0 && !self.connPool.closed {
+          self.log("lost all connection to server\n")
+          time.Sleep(time.Second * 30)
+          self.connect(conns)
+        } else if self.livingConns < conns && !self.connPool.closed {
+          self.connect(conns - self.livingConns)
+        }
+
+      case <-stopHeartBeat:
+        p("stop client heartbeat\n")
+        return
       }
     }
   }()

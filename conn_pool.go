@@ -27,6 +27,10 @@ type ConnPool struct {
 
   bytesRead uint64
   bytesWrite uint64
+
+  conns []*Conn
+
+  closed bool
 }
 
 func newConnPool(key string, newSessionChan chan *Session) *ConnPool {
@@ -40,8 +44,10 @@ func newConnPool(key string, newSessionChan chan *Session) *ConnPool {
     sessions: make(map[uint64]*Session),
     newSessionChan: newSessionChan,
 
-    stopListen: make(chan bool, 32),
-    stopHeartBeat: make(chan bool, 32),
+    stopListen: make(chan bool, 8),
+    stopHeartBeat: make(chan bool, 8),
+
+    conns: make([]*Conn, 0, 64),
   }
   self.byteKeys, self.uint64Keys = calculateKeys(key)
   go self.start()
@@ -84,7 +90,7 @@ func (self *ConnPool) start() {
   for {
     select {
     case conn := <-self.newConnChan:
-      newConn(conn, self)
+      self.conns = append(self.conns, newConn(conn, self))
 
     case info := <-self.infoChan:
       infoBufLock.Lock()
@@ -99,8 +105,12 @@ func (self *ConnPool) start() {
 }
 
 func (self *ConnPool) Close() {
+  self.closed = true
   self.stopListen <- true
   self.stopHeartBeat <- true
+  for _, conn := range self.conns {
+    conn.Close()
+  }
 }
 
 func (self *ConnPool) log(f string, vars ...interface{}) {

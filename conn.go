@@ -13,8 +13,8 @@ type Conn struct {
   conn *net.TCPConn
   pool *ConnPool
 
-  endReader chan bool
-  endWriter chan bool
+  stopWriter chan bool
+  closed bool
 }
 
 func newConn(conn *net.TCPConn, connPool *ConnPool) *Conn {
@@ -22,8 +22,7 @@ func newConn(conn *net.TCPConn, connPool *ConnPool) *Conn {
     conn: conn,
     pool: connPool,
 
-    endReader: make(chan bool),
-    endWriter: make(chan bool),
+    stopWriter: make(chan bool, 8),
   }
 
   go self.startReader()
@@ -148,6 +147,9 @@ func (self *Conn) startWriter() {
         return
       }
       atomic.AddUint64(&self.pool.bytesWrite, uint64(1))
+
+    case <-self.stopWriter:
+      return
     }
 
   }
@@ -167,9 +169,12 @@ func (self *Conn) packSessionFrame(toSend ToSend) []byte {
 }
 
 func (self *Conn) Close() {
-  self.endWriter <- true
-  self.endReader <- true
-  self.conn.Close()
+  if self.closed {
+    return
+  }
+  self.closed = true
+  self.conn.Close() // reader will fail
+  self.stopWriter <- true
   if self.pool.deadConnNotify != nil {
     self.pool.deadConnNotify <- true
   }

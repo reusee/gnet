@@ -7,6 +7,7 @@ import (
 )
 
 func TestNew(t *testing.T) {
+  p("Start TestNew\n")
   server, err := NewServer(":8888", "abcd")
   if err != nil {
     t.Fatal(err)
@@ -43,6 +44,7 @@ func TestNew(t *testing.T) {
 }
 
 func TestSessionAbort(t *testing.T) {
+  p("Start TestSessionAbort\n")
   server, err := NewServer(":8700", "abc")
   if err != nil {
     t.Fatal(err)
@@ -90,6 +92,7 @@ func TestSessionAbort(t *testing.T) {
 }
 
 func TestSessionFinish(t *testing.T) {
+  p("Start TestSessionFinish\n")
   server, err := NewServer(":8710", "abc")
   if err != nil {
     t.Fatal(err)
