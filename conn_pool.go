@@ -80,18 +80,18 @@ func (self *ConnPool) startConnWriter(conn *net.TCPConn) {
   var err error
   for {
     select {
-    case data := <-self.sendChan:
-      if data.session.remoteReadState == ABORT {
+    case toSend := <-self.sendChan:
+      if toSend.session.remoteReadState == ABORT {
         continue
       }
-      toSend := self.packSessionPacket(data.data)
-      _, err = conn.Write(toSend)
+      frame := self.packSessionPacket(toSend)
+      _, err = conn.Write(frame)
       if err != nil {
         self.dealWithDeadConn(conn)
-        self.sendChan <- data
+        self.sendChan <- toSend
         return
       }
-      atomic.AddUint64(&self.bytesWrite, uint64(len(toSend)))
+      atomic.AddUint64(&self.bytesWrite, uint64(len(frame)))
 
     case <-keepAliveTicker.C:
       _, err := conn.Write([]byte{PACKET_TYPE_PING})
@@ -135,40 +135,46 @@ func (self *ConnPool) startConnReader(conn *net.TCPConn) {
   }
 }
 
-func (self *ConnPool) packSessionPacket(data []byte) []byte {
-  dataLen := len(data)
-  pack := make([]byte, 1 + 4 + dataLen)
+func (self *ConnPool) packSessionPacket(toSend ToSend) []byte {
+  sessionId, frame := toSend.session.id, toSend.frame
+  frameLen := len(frame)
+  pack := make([]byte, 1 + 8 + 4 + frameLen)
   pack[0] = PACKET_TYPE_SESSION // packet type
-  dataLenBuf := new(bytes.Buffer)
-  binary.Write(dataLenBuf, binary.BigEndian, uint32(dataLen))
-  copy(pack[1:5], dataLenBuf.Bytes()[:4]) // session payload len
-  xorSlice(data, pack[5:], dataLen, dataLen % 8, self.byteKeys, self.uint64Keys)
+  buf := new(bytes.Buffer)
+  binary.Write(buf, binary.BigEndian, sessionId) // session id
+  binary.Write(buf, binary.BigEndian, uint32(frameLen)) // frame length
+  copy(pack[1:13], buf.Bytes()[:12])
+  xorSlice(frame, pack[13:], frameLen, frameLen % 8, self.byteKeys, self.uint64Keys)
   return pack
 }
 
 func (self *ConnPool) unpackSessionPacket(conn *net.TCPConn) ([]byte, uint64, error) {
-  var payloadLen uint32
   var sessionId uint64
-  err := binary.Read(conn, binary.BigEndian, &payloadLen)
+  err := binary.Read(conn, binary.BigEndian, &sessionId)
   if err != nil {
     self.dealWithDeadConn(conn)
     return nil, 0, err
   }
-  atomic.AddUint64(&self.bytesRead, uint64(payloadLen))
 
-  encrypted := make([]byte, payloadLen)
+  var frameLen uint32
+  err = binary.Read(conn, binary.BigEndian, &frameLen)
+  if err != nil {
+    self.dealWithDeadConn(conn)
+    return nil, 0, err
+  }
+  atomic.AddUint64(&self.bytesRead, uint64(frameLen))
+
+  encrypted := make([]byte, frameLen)
   _, err = io.ReadFull(conn, encrypted)
   if err != nil {
     self.dealWithDeadConn(conn)
     return nil, 0, err
   }
 
-  payload := make([]byte, payloadLen)
-  xorSlice(encrypted, payload, int(payloadLen), int(payloadLen) % 8, self.byteKeys, self.uint64Keys)
+  frame := make([]byte, frameLen)
+  xorSlice(encrypted, frame, int(frameLen), int(frameLen) % 8, self.byteKeys, self.uint64Keys)
 
-  binary.Read(bytes.NewReader(payload[:8]), binary.BigEndian, &sessionId)
-  payload = payload[8:]
-  return payload, sessionId, nil
+  return frame, sessionId, nil
 }
 
 func (self *ConnPool) log(f string, vars ...interface{}) {

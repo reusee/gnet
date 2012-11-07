@@ -46,7 +46,7 @@ type Session struct {
 
 type ToSend struct {
   session *Session
-  data []byte
+  frame []byte
 }
 
 func newSession(id uint64, sendChan chan ToSend) *Session {
@@ -131,15 +131,15 @@ func (self *Session) startDataProvider() {
 func (self *Session) startReceive() {
   for {
     select {
-    case payload := <-self.incomingChan:
-      packetType := payload[0]
+    case frame := <-self.incomingChan:
+      packetType := frame[0]
       switch packetType {
       case SESSION_PACKET_TYPE_DATA:
-        self.handleDataPacket(payload[1:])
+        self.handleDataPacket(frame[1:])
       case SESSION_PACKET_TYPE_STATE:
-        self.handleStatePacket(payload[1:])
+        self.handleStatePacket(frame[1:])
       case SESSION_PACKET_TYPE_INFO:
-        self.handleInfoPacket(payload[1:])
+        self.handleInfoPacket(frame[1:])
       }
 
     case <-self.stopReceive:
@@ -180,13 +180,13 @@ func (self *Session) handleDataPacket(data []byte) {
   }
 }
 
-func (self *Session) handleStatePacket(payload []byte) {
-  state := payload[0]
+func (self *Session) handleStatePacket(frame []byte) {
+  state := frame[0]
   switch state {
   case STATE_FINISH_SEND:
     self.remoteSendState = FINISH
     var serial uint32
-    binary.Read(bytes.NewReader(payload[1:]), binary.BigEndian, &serial)
+    binary.Read(bytes.NewReader(frame[1:]), binary.BigEndian, &serial)
     self.remoteSendFinishAt = serial
     if self.remoteSendState == FINISH && self.fetchedSerial >= self.remoteSendFinishAt {
       self.State <- STATE_FINISH_SEND
@@ -194,7 +194,7 @@ func (self *Session) handleStatePacket(payload []byte) {
   case STATE_FINISH_READ:
     self.remoteReadState = FINISH
     var serial uint32
-    binary.Read(bytes.NewReader(payload[1:]), binary.BigEndian, &serial)
+    binary.Read(bytes.NewReader(frame[1:]), binary.BigEndian, &serial)
     self.remoteReadFinishAt = serial
     if self.remoteReadState == FINISH && self.fetchedSerial >= self.remoteReadFinishAt {
       self.State <- STATE_FINISH_READ
@@ -212,6 +212,9 @@ func (self *Session) handleInfoPacket(data []byte) {
   reader := bytes.NewReader(data)
   var timestamp, curSerial, maxSerial uint32
   binary.Read(reader, binary.BigEndian, &timestamp)
+  if timestamp < self.lastRemoteHeartbeatTime {
+    return
+  }
   binary.Read(reader, binary.BigEndian, &curSerial)
   binary.Read(reader, binary.BigEndian, &maxSerial)
 
@@ -232,8 +235,6 @@ func (self *Session) handleInfoPacket(data []byte) {
 
 func (self *Session) packData(data []byte) []byte {
   buf := new(bytes.Buffer)
-  binary.Write(buf, binary.BigEndian, self.id) // session id
-
   buf.Write([]byte{SESSION_PACKET_TYPE_DATA}) // packet type
 
   serial := atomic.AddUint32(&self.serial, uint32(1))
@@ -246,8 +247,6 @@ func (self *Session) packData(data []byte) []byte {
 
 func (self *Session) packState(state byte, extra []byte) []byte {
   buf := new(bytes.Buffer)
-  binary.Write(buf, binary.BigEndian, self.id) // session id
-
   buf.Write([]byte{SESSION_PACKET_TYPE_STATE}) // packet type
 
   buf.Write([]byte{state}) // state
@@ -257,8 +256,6 @@ func (self *Session) packState(state byte, extra []byte) []byte {
 
 func (self *Session) sendInfo(curSerial uint32, maxSerial uint32) {
   buf := new(bytes.Buffer)
-  binary.Write(buf, binary.BigEndian, self.id) // session id
-
   buf.Write([]byte{SESSION_PACKET_TYPE_INFO}) // packet type
 
   binary.Write(buf, binary.BigEndian, uint32(time.Now().Unix())) // timestamp
