@@ -43,7 +43,6 @@ func (self *Server) start(key string) {
       continue
     }
     raddr := conn.RemoteAddr().String()
-    self.log("remote addr %v\n", raddr)
     host, _, _ := net.SplitHostPort(raddr)
     self.log("new conn from %s\n", host)
     if self.connPools[host] == nil { // a new remote host
