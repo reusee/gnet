@@ -299,22 +299,23 @@ func (self *Session) AbortRead() { // stop reading immediately
   self.sendChan <- ToSend{self, self.packState(STATE_ABORT_READ, []byte{})}
 }
 
-func (self *Session) Close() {
-  self.FinishRead()
-  self.FinishSend()
+func (self *Session) stop() {
   self.stopReceive <- true
   self.stopHeartBeat <- true
   self.stopProvider <- true
   self.closed = true
 }
 
+func (self *Session) Close() {
+  self.FinishRead()
+  self.FinishSend()
+  self.stop()
+}
+
 func (self *Session) Abort() {
   self.AbortSend()
   self.AbortRead()
-  self.stopReceive <- true
-  self.stopHeartBeat <- true
-  self.stopProvider <- true
-  self.closed = true
+  self.stop()
 }
 
 func (self *Session) log(f string, vars ...interface{}) {
