@@ -71,9 +71,9 @@ func NewClient(addr string, key string, conns int) (*Client, error) {
   }
 
   go func() {
-    ticker := time.NewTicker(time.Second * 5)
+    heartBeat := time.NewTicker(time.Second * 5)
     for {
-      <-ticker.C
+      <-heartBeat.C
       self.log("living connections %d\n", self.livingConns)
       if self.livingConns == 0 {
         self.log("lost all connection to server\n")
