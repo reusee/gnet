@@ -6,10 +6,11 @@ import (
 )
 
 const (
-  CHAN_BUF_SIZE = 2 ^ 19
+  CHAN_BUF_SIZE = 2 ^ 16
 
   PACKET_TYPE_SESSION = byte(0)
   PACKET_TYPE_PING = byte(1)
+  PACKET_TYPE_INFO = byte(2)
 
   SESSION_PACKET_TYPE_DATA = byte(0)
   SESSION_PACKET_TYPE_STATE = byte(1)

@@ -21,6 +21,7 @@ type Session struct {
   maxIncomingSerial uint32
   incomingChan chan []byte
   sendChan chan ToSend
+  infoChan chan ToSend
   packets map[uint32][]byte
 
   readState int // for session cleaner
@@ -49,7 +50,7 @@ type ToSend struct {
   frame []byte
 }
 
-func newSession(id uint64, sendChan chan ToSend) *Session {
+func newSession(id uint64, connPool *ConnPool) *Session {
   self := &Session{
     id: id,
 
@@ -59,7 +60,8 @@ func newSession(id uint64, sendChan chan ToSend) *Session {
 
     incomingSerial: 1,
     incomingChan: make(chan []byte, CHAN_BUF_SIZE),
-    sendChan: sendChan,
+    sendChan: connPool.sendChan,
+    infoChan: connPool.infoChan,
     packets: make(map[uint32][]byte),
 
     readState: NORMAL,
@@ -88,7 +90,7 @@ type Packet struct {
 }
 
 func (self *Session) startHeartBeat() {
-  heartBeat := time.NewTicker(time.Second * 3)
+  heartBeat := time.NewTicker(time.Second * 2)
   for {
     select {
     case <-heartBeat.C:
@@ -99,7 +101,7 @@ func (self *Session) startHeartBeat() {
 
       self.sendInfo(cur, max)
 
-      if uint32(time.Now().Unix()) - self.lastRemoteHeartbeatTime > 60 { // remote session is dead
+      if self.lastRemoteHeartbeatTime > 0 && uint32(time.Now().Unix()) - self.lastRemoteHeartbeatTime > 60 { // remote session is dead
         self.Close()
       }
 
@@ -262,7 +264,7 @@ func (self *Session) sendInfo(curSerial uint32, maxSerial uint32) {
   binary.Write(buf, binary.BigEndian, curSerial) // current waiting serial
   binary.Write(buf, binary.BigEndian, maxSerial) // max received serial
 
-  self.sendChan <- ToSend{self, buf.Bytes()}
+  self.infoChan <- ToSend{self, buf.Bytes()}
 }
 
 func (self *Session) Send(data []byte) int {

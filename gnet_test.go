@@ -47,10 +47,12 @@ func TestSessionAbort(t *testing.T) {
   if err != nil {
     t.Fatal(err)
   }
+  defer server.Close()
   client, err := NewClient("localhost:8700", "abc", 8)
   if err != nil {
     t.Fatal(err)
   }
+  defer client.Close()
 
   go func() {
     session := <-server.New
@@ -92,10 +94,12 @@ func TestSessionFinish(t *testing.T) {
   if err != nil {
     t.Fatal(err)
   }
+  defer server.Close()
   client, err := NewClient("localhost:8710", "abc", 8)
   if err != nil {
     t.Fatal(err)
   }
+  defer client.Close()
 
   go func() {
     session := <-server.New
@@ -121,13 +125,14 @@ func TestSessionFinish(t *testing.T) {
   }
   session.FinishSend()
   var data []byte
-  LOOP: for {
+  //LOOP:
+  for {
     select {
     case data = <-session.Data:
     case state := <-session.State:
       if state == STATE_FINISH_READ {
         fmt.Printf("server finish read. quit. last echo %s\n", data)
-        break LOOP
+        //break LOOP
       }
     }
   }
