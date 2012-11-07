@@ -67,7 +67,11 @@ func newSession(id uint64, sendChan chan ToSend) *Session {
     Data: make(chan []byte),
     State: make(chan byte, CHAN_BUF_SIZE),
   }
-  go self.start()
+
+  go self.startHeartBeat()
+  go self.startDataProvider()
+  go self.startReceive()
+
   return self
 }
 
@@ -77,43 +81,43 @@ type Packet struct {
   index int
 }
 
-func (self *Session) start() {
-  go func() { // heart beat
-    heartBeat := time.NewTicker(time.Second * 3)
-    for {
-      select {
-      case <-heartBeat.C:
-        cur, max, count := self.incomingSerial, self.maxIncomingSerial, self.incomingDataCount
-        if cur < max {
-          self.log("packet gap %d %d %d\n", cur, max, count)
-        }
-
-      case <-self.stopHeartBeat:
-        return
+func (self *Session) startHeartBeat() {
+  heartBeat := time.NewTicker(time.Second * 3)
+  for {
+    select {
+    case <-heartBeat.C:
+      cur, max, count := self.incomingSerial, self.maxIncomingSerial, self.incomingDataCount
+      if cur < max {
+        self.log("packet gap %d %d %d\n", cur, max, count)
       }
-    }
-  }()
 
-  go func() { // data provider
-    for {
-      select {
-      case packet := <-self.dataBuffer:
-        serial, data := packet.serial, packet.data
-        self.Data <- data
-        self.fetchedSerial = serial
-        if self.remoteReadState == FINISH && serial >= self.remoteReadFinishAt {
-          self.State <- STATE_FINISH_READ
-        }
-        if self.remoteSendState == FINISH && serial >= self.remoteSendFinishAt {
-          self.State <- STATE_FINISH_SEND
-        }
-      case <-self.stopProvider:
-        return
+    case <-self.stopHeartBeat:
+      return
+    }
+  }
+}
+
+func (self *Session) startDataProvider() {
+  for {
+    select {
+    case packet := <-self.dataBuffer:
+      serial, data := packet.serial, packet.data
+      self.Data <- data
+      self.fetchedSerial = serial
+      if self.remoteReadState == FINISH && serial >= self.remoteReadFinishAt {
+        self.State <- STATE_FINISH_READ
       }
+      if self.remoteSendState == FINISH && serial >= self.remoteSendFinishAt {
+        self.State <- STATE_FINISH_SEND
+      }
+    case <-self.stopProvider:
+      return
     }
-  }()
+  }
+}
 
-  for { // receive incoming packet
+func (self *Session) startReceive() {
+  for {
     select {
     case payload := <-self.incomingChan:
       packetType := payload[0]
