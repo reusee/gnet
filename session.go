@@ -99,6 +99,10 @@ func (self *Session) startHeartBeat() {
 
       self.sendInfo(cur, max)
 
+      if time.Now().Unix() - self.lastRemoteHeartbeatTime > 60 { // remote session is dead
+        return self.Close()
+      }
+
     case <-self.stopHeartBeat:
       return
     }
