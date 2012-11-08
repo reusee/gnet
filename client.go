@@ -13,10 +13,14 @@ func init() {
 
 type Client struct {
   connPool *ConnPool
+  conns int
 
-  Close func()
   livingConns int
   raddr *net.TCPAddr
+
+  deadConnNotify chan bool
+
+  heartBeat *Ticker
 }
 
 func NewClient(addr string, key string, conns int) (*Client, error) {
@@ -25,74 +29,62 @@ func NewClient(addr string, key string, conns int) (*Client, error) {
     return nil, err
   }
 
-  dumbChan := make(chan *Session, CHAN_BUF_SIZE)
-  stopDumbChan := make(chan bool, 8)
-  go func() { // newSessionChan
-    for {
-      select {
-      case <-dumbChan:
-      case <-stopDumbChan:
-        break
-      }
-    }
-  }()
-
-  connPool := newConnPool(key, dumbChan)
-  stopBadConnWatcher := make(chan bool, 8)
-  stopHeartBeat := make(chan bool, 8)
   self := &Client{
-    connPool: connPool,
+    connPool: newConnPool(key, nil),
+    conns: conns,
     raddr: raddr,
-  }
-  self.Close = func() {
-    stopDumbChan <- true
-    stopBadConnWatcher <- true
-    self.connPool.Close()
+
+    deadConnNotify: make(chan bool, CHAN_BUF_SIZE),
+
+    heartBeat: NewTicker(time.Second * 5),
   }
 
-  go func() { // watch for bad conn
-    c := make(chan bool, CHAN_BUF_SIZE)
-    connPool.deadConnNotify = c
-    for {
-      select {
-      case <-c:
-        if self.livingConns > 0 {
-          self.livingConns--
-        }
-      case <-stopBadConnWatcher:
-        break
-      }
-    }
-  }()
+  go self.startDeadConnWatcher()
+  go self.startHeartBeat()
 
   err = self.connect(conns)
   if err != nil {
     return nil, err
   }
 
-  go func() {
-    heartBeat := time.NewTicker(time.Second * 5)
-    for {
-      select {
-      case <-heartBeat.C:
-
-        self.log("living connections %d\n", self.livingConns)
-        if self.livingConns == 0 && !self.connPool.closed {
-          self.log("lost all connection to server\n")
-          time.Sleep(time.Second * 30)
-          self.connect(conns)
-        } else if self.livingConns < conns && !self.connPool.closed {
-          self.connect(conns - self.livingConns)
-        }
-
-      case <-stopHeartBeat:
-        p("stop client heartbeat\n")
-        return
-      }
-    }
-  }()
-
   return self, nil
+}
+
+func (self *Client) Close() {
+  self.connPool.Close()
+  self.heartBeat.Stop()
+  close(self.deadConnNotify)
+}
+
+func (self *Client) startDeadConnWatcher() {
+  self.connPool.deadConnNotify = self.deadConnNotify
+  for {
+    _, ok := <-self.deadConnNotify
+    if !ok {
+      return
+    }
+    if self.livingConns > 0 {
+      self.livingConns--
+    }
+  }
+}
+
+func (self *Client) startHeartBeat() {
+  for {
+    _, ok := <-self.heartBeat.C
+    if !ok {
+      return
+    }
+
+    self.log("living connections %d\n", self.livingConns)
+    if self.livingConns == 0 && !self.connPool.closed {
+      self.log("lost all connection to server\n")
+      time.Sleep(time.Second * 30)
+      self.connect(self.conns)
+    } else if self.livingConns < self.conns && !self.connPool.closed {
+      self.connect(self.conns - self.livingConns)
+    }
+  }
 }
 
 func (self *Client) connect(conns int) (err error) {
@@ -115,10 +107,7 @@ func (self *Client) connect(conns int) (err error) {
 }
 
 func (self *Client) NewSession() *Session {
-  id := uint64(rand.Int63())
-  session := newSession(id, self.connPool)
-  self.connPool.sessions[id] = session
-  return session
+  return self.connPool.newSession(uint64(rand.Int63()))
 }
 
 func (self *Client) log(s string, vars ...interface{}) {

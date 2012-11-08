@@ -35,3 +35,35 @@ func p(f string, vars ...interface{}) {
 func ps(f string, vars ...interface{}) string {
   return fmt.Sprintf(f, vars...)
 }
+
+type Ticker struct {
+  C chan time.Time
+  closed bool
+  ticker *time.Ticker
+}
+
+func NewTicker(d time.Duration) *Ticker {
+  self := &Ticker{
+    C: make(chan time.Time),
+    closed: false,
+    ticker: time.NewTicker(d),
+  }
+  go func() {
+    for {
+      if self.closed {
+        return
+      }
+      self.C <- <-self.ticker.C
+    }
+  }()
+  return self
+}
+
+func (self *Ticker) Stop() {
+  if self.closed {
+    return
+  }
+  self.closed = true
+  close(self.C)
+  self.ticker.Stop()
+}

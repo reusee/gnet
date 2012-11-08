@@ -12,15 +12,12 @@ type Session struct {
   id uint64
   serial uint32
   closed bool
-
-  stopReceive chan bool
-  stopHeartBeat chan bool
-  stopProvider chan bool
+  heartBeat *Ticker
 
   incomingSerial uint32
   maxIncomingSerial uint32
   incomingChan chan []byte
-  sendChan chan ToSend
+  sendQueue chan ToSend
   infoChan chan ToSend
   packets map[uint32][]byte
 
@@ -43,6 +40,11 @@ type Session struct {
   lastRemoteHeartbeatTime uint32
   lastRemoteCurSerial uint32
   lastRemoteMaxSerial uint32
+
+  stopProvideData chan bool
+  receiveStopped chan bool
+  providerStopped chan bool
+  heartBeatStopped chan bool
 }
 
 type ToSend struct {
@@ -53,14 +55,11 @@ type ToSend struct {
 func newSession(id uint64, connPool *ConnPool) *Session {
   self := &Session{
     id: id,
-
-    stopReceive: make(chan bool, 32), // may be multiple push
-    stopHeartBeat: make(chan bool, 32),
-    stopProvider: make(chan bool, 32),
+    heartBeat: NewTicker(time.Second * 2),
 
     incomingSerial: 1,
     incomingChan: make(chan []byte, CHAN_BUF_SIZE),
-    sendChan: connPool.sendChan,
+    sendQueue: connPool.sendQueue,
     infoChan: connPool.infoChan,
     packets: make(map[uint32][]byte),
 
@@ -74,6 +73,11 @@ func newSession(id uint64, connPool *ConnPool) *Session {
     dataBuffer: make(chan Packet, CHAN_BUF_SIZE),
     Data: make(chan []byte),
     State: make(chan byte, CHAN_BUF_SIZE),
+
+    stopProvideData: make(chan bool, 1),
+    receiveStopped: make(chan bool, 1),
+    providerStopped: make(chan bool, 1),
+    heartBeatStopped: make(chan bool, 1),
   }
 
   go self.startHeartBeat()
@@ -90,65 +94,68 @@ type Packet struct {
 }
 
 func (self *Session) startHeartBeat() {
-  heartBeat := time.NewTicker(time.Second * 2)
+  defer func() {
+    self.heartBeatStopped <- true
+    self.log("heartbeat stopped\n")
+  }()
   for {
-    select {
-    case <-heartBeat.C:
-      cur, max, count := self.incomingSerial, self.maxIncomingSerial, self.incomingDataCount
-      if cur < max {
-        self.log("packet gap %d %d %d\n", cur, max, count)
-      }
-
-      self.sendInfo(cur, max)
-
-      if self.lastRemoteHeartbeatTime > 0 && uint32(time.Now().Unix()) - self.lastRemoteHeartbeatTime > 60 { // remote session is dead
-        self.Close()
-      }
-
-    case <-self.stopHeartBeat:
-      return
+    _, ok := <-self.heartBeat.C
+    if !ok {
+      break
     }
+    cur, max, count := self.incomingSerial, self.maxIncomingSerial, self.incomingDataCount
+    if cur < max {
+      self.log("packet gap %d %d %d\n", cur, max, count)
+    }
+
+    self.sendInfo(cur, max)
   }
 }
 
 func (self *Session) startDataProvider() {
+  defer func() {
+    self.providerStopped <- true
+    self.log("provider stopped\n")
+  }()
   for {
-    select {
-    case packet := <-self.dataBuffer:
-      serial, data := packet.serial, packet.data
-      self.Data <- data
-      self.fetchedSerial = serial
-      if self.remoteReadState == FINISH && serial >= self.remoteReadFinishAt {
-        self.State <- STATE_FINISH_READ
-      }
-      if self.remoteSendState == FINISH && serial >= self.remoteSendFinishAt {
-        self.State <- STATE_FINISH_SEND
-      }
-    case <-self.stopProvider:
+    packet, ok := <-self.dataBuffer
+    if !ok {
       return
+    }
+    serial, data := packet.serial, packet.data
+    select {
+    case self.Data <- data:
+    case <-self.stopProvideData:
+      return
+    }
+    self.fetchedSerial = serial
+    if self.remoteReadState == FINISH && serial >= self.remoteReadFinishAt {
+      self.State <- STATE_FINISH_READ
+    }
+    if self.remoteSendState == FINISH && serial >= self.remoteSendFinishAt {
+      self.State <- STATE_FINISH_SEND
     }
   }
 }
 
 func (self *Session) startReceive() {
+  defer func() {
+    self.receiveStopped <- true
+    self.log("receive stopped\n")
+  }()
   for {
-    select {
-    case frame := <-self.incomingChan:
-      packetType := frame[0]
-      switch packetType {
-      case SESSION_PACKET_TYPE_DATA:
-        self.handleDataPacket(frame[1:])
-      case SESSION_PACKET_TYPE_STATE:
-        self.handleStatePacket(frame[1:])
-      case SESSION_PACKET_TYPE_INFO:
-        self.handleInfoPacket(frame[1:])
-      }
-
-    case <-self.stopReceive:
+    frame, ok := <-self.incomingChan
+    if !ok {
       return
-
-    case <-time.After(IDLE_TIME_BEFORE_SESSION_CLOSE):
-      self.Close()
+    }
+    packetType := frame[0]
+    switch packetType {
+    case SESSION_PACKET_TYPE_DATA:
+      self.handleDataPacket(frame[1:])
+    case SESSION_PACKET_TYPE_STATE:
+      self.handleStatePacket(frame[1:])
+    case SESSION_PACKET_TYPE_INFO:
+      self.handleInfoPacket(frame[1:])
     }
   }
 }
@@ -227,7 +234,7 @@ func (self *Session) handleInfoPacket(data []byte) {
   }
 
   if curSerial <= self.serial && curSerial == self.lastRemoteCurSerial { // need to resend
-    self.sendChan <- ToSend{self, self.packets[curSerial]}
+    self.sendQueue <- ToSend{self, self.packets[curSerial]}
   }
 
   self.lastRemoteHeartbeatTime = timestamp
@@ -271,7 +278,7 @@ func (self *Session) Send(data []byte) int {
   if self.remoteReadState == ABORT {
     return ABORT
   }
-  self.sendChan <- ToSend{self, self.packData(data)}
+  self.sendQueue <- ToSend{self, self.packData(data)}
   return NORMAL
 }
 
@@ -279,43 +286,36 @@ func (self *Session) FinishSend() { // no more data will be send
   self.sendState = FINISH
   serialBuf := new(bytes.Buffer)
   binary.Write(serialBuf, binary.BigEndian, &self.serial)
-  self.sendChan <- ToSend{self, self.packState(STATE_FINISH_SEND, serialBuf.Bytes())}
+  self.sendQueue <- ToSend{self, self.packState(STATE_FINISH_SEND, serialBuf.Bytes())}
 }
 
 func (self *Session) AbortSend() { // abort all pending data immediately
   self.sendState = ABORT
-  self.sendChan <- ToSend{self, self.packState(STATE_ABORT_SEND, []byte{})}
+  self.sendQueue <- ToSend{self, self.packState(STATE_ABORT_SEND, []byte{})}
 }
 
 func (self *Session) FinishRead() { // no more data will be read
   self.readState = FINISH
   serialBuf := new(bytes.Buffer)
   binary.Write(serialBuf, binary.BigEndian, &self.serial)
-  self.sendChan <- ToSend{self, self.packState(STATE_FINISH_READ, serialBuf.Bytes())}
+  self.sendQueue <- ToSend{self, self.packState(STATE_FINISH_READ, serialBuf.Bytes())}
 }
 
 func (self *Session) AbortRead() { // stop reading immediately
   self.readState = ABORT
-  self.sendChan <- ToSend{self, self.packState(STATE_ABORT_READ, []byte{})}
+  self.sendQueue <- ToSend{self, self.packState(STATE_ABORT_READ, []byte{})}
 }
 
 func (self *Session) stop() {
-  self.stopReceive <- true
-  self.stopHeartBeat <- true
-  self.stopProvider <- true
   self.closed = true
-}
-
-func (self *Session) Close() {
-  self.FinishRead()
-  self.FinishSend()
-  self.stop()
-}
-
-func (self *Session) Abort() {
-  self.AbortSend()
-  self.AbortRead()
-  self.stop()
+  close(self.incomingChan)
+  p("start>\n")
+  <-self.receiveStopped
+  self.heartBeat.Stop()
+  <-self.heartBeatStopped
+  close(self.dataBuffer)
+  self.stopProvideData <- true
+  <-self.providerStopped
 }
 
 func (self *Session) log(f string, vars ...interface{}) {

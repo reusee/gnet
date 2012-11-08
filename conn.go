@@ -13,8 +13,12 @@ type Conn struct {
   conn *net.TCPConn
   pool *ConnPool
 
-  stopWriter chan bool
-  closed bool
+  heartBeat *Ticker
+
+  readerStopped chan bool
+  writerStopped chan bool
+
+  err bool
 }
 
 func newConn(conn *net.TCPConn, connPool *ConnPool) *Conn {
@@ -22,7 +26,10 @@ func newConn(conn *net.TCPConn, connPool *ConnPool) *Conn {
     conn: conn,
     pool: connPool,
 
-    stopWriter: make(chan bool, 8),
+    heartBeat: NewTicker(time.Second * 10),
+
+    readerStopped: make(chan bool, 1),
+    writerStopped: make(chan bool, 1),
   }
 
   go self.startReader()
@@ -32,41 +39,48 @@ func newConn(conn *net.TCPConn, connPool *ConnPool) *Conn {
 }
 
 func (self *Conn) startReader() {
+  defer func() {
+    self.readerStopped <- true
+  }()
   for {
     var packetType byte
+    p(">\n")
     err := binary.Read(self.conn, binary.BigEndian, &packetType)
+    p(">>\n")
     if err != nil {
-      self.Close()
+      self.err = true
       return
     }
+    p(">>>\n")
 
     switch packetType {
 
     case PACKET_TYPE_SESSION:
       payload, sessionId, err := self.readSessionFrame()
       if err != nil {
-        self.Close()
+        self.err = true
         return
       }
       session := self.pool.sessions[sessionId]
       if session == nil { // create new session
-        session = newSession(sessionId, self.pool)
-        self.pool.sessions[sessionId] = session
-        self.pool.newSessionChan <- session
+        session = self.pool.newSession(sessionId)
+      }
+      if session.closed {
+        continue
       }
       session.incomingChan <- payload
 
     case PACKET_TYPE_INFO:
       var frameLen uint32
-      binary.Read(self.conn, binary.BigEndian, &frameLen)
+      err = binary.Read(self.conn, binary.BigEndian, &frameLen)
       if err != nil {
-        self.Close()
+        self.err = true
         return
       }
       frame := make([]byte, frameLen)
       _, err := io.ReadFull(self.conn, frame)
       if err != nil {
-        self.Close()
+        self.err = true
         return
       }
       var sessionId uint64
@@ -75,6 +89,9 @@ func (self *Conn) startReader() {
         binary.Read(bytes.NewReader(frame[i * 21: i * 21 + 8]), binary.BigEndian, &sessionId)
         session := self.pool.sessions[sessionId]
         if session == nil {
+          continue
+        }
+        if session.closed {
           continue
         }
         sessionFrame := frame[i * 21 + 8: (i + 1) * 21]
@@ -90,14 +107,14 @@ func (self *Conn) readSessionFrame() ([]byte, uint64, error) {
   var sessionId uint64
   err := binary.Read(self.conn, binary.BigEndian, &sessionId)
   if err != nil {
-    self.Close()
+    self.err = true
     return nil, 0, err
   }
 
   var frameLen uint32
   err = binary.Read(self.conn, binary.BigEndian, &frameLen)
   if err != nil {
-    self.Close()
+    self.err = true
     return nil, 0, err
   }
   atomic.AddUint64(&self.pool.bytesRead, uint64(frameLen))
@@ -105,7 +122,7 @@ func (self *Conn) readSessionFrame() ([]byte, uint64, error) {
   encrypted := make([]byte, frameLen)
   _, err = io.ReadFull(self.conn, encrypted)
   if err != nil {
-    self.Close()
+    self.err = true
     return nil, 0, err
   }
 
@@ -116,19 +133,21 @@ func (self *Conn) readSessionFrame() ([]byte, uint64, error) {
 }
 
 func (self *Conn) startWriter() {
-  keepAliveTicker := time.NewTicker(time.Second * 10)
+  defer func() {
+    self.writerStopped <- true
+  }()
   var err error
   for {
     select {
-    case toSend := <-self.pool.sendChan:
+    case toSend := <-self.pool.sendQueue:
       if toSend.session.remoteReadState == ABORT {
         continue
       }
       frame := self.packSessionFrame(toSend)
       _, err = self.conn.Write(frame)
       if err != nil {
-        self.Close()
-        self.pool.sendChan <- toSend
+        self.err = true
+        self.pool.sendQueue <- toSend
         return
       }
       atomic.AddUint64(&self.pool.bytesWrite, uint64(len(frame)))
@@ -136,22 +155,21 @@ func (self *Conn) startWriter() {
     case frame := <-self.pool.rawSendChan:
       _, err := self.conn.Write(frame)
       if err != nil {
-        self.Close()
+        self.err = true
         return
       }
 
-    case <-keepAliveTicker.C:
+    case _, ok := <-self.heartBeat.C:
+      if !ok {
+        return
+      }
       _, err := self.conn.Write([]byte{PACKET_TYPE_PING})
       if err != nil {
-        self.Close()
+        self.err = true
         return
       }
       atomic.AddUint64(&self.pool.bytesWrite, uint64(1))
-
-    case <-self.stopWriter:
-      return
     }
-
   }
 }
 
@@ -169,13 +187,15 @@ func (self *Conn) packSessionFrame(toSend ToSend) []byte {
 }
 
 func (self *Conn) Close() {
-  if self.closed {
-    return
-  }
-  self.closed = true
-  self.conn.Close() // reader will fail
-  self.stopWriter <- true
-  if self.pool.deadConnNotify != nil {
-    self.pool.deadConnNotify <- true
-  }
+  self.conn.Close()
+  self.heartBeat.Stop()
+  self.log("told reader to stop\n")
+  <-self.readerStopped
+  self.log("reader stopped\n")
+  <-self.writerStopped
+  self.log("writer stopped\n")
+}
+
+func (self *Conn) log(f string, vars ...interface{}) {
+  p("CONN " + f, vars...)
 }
