@@ -11,9 +11,10 @@ type Server struct {
   closed bool
   connPools map[uint64]*ConnPool
   New chan *Session
-  newConnChan chan *net.TCPConn
+  newSessionBuffer *InfiniteSessionChan
+  newConnChan *InfiniteTCPConnChan
   stop chan struct{}
-  connPoolStopNotify chan *ConnPool
+  connPoolStopNotify *InfiniteConnPoolChan
 }
 
 func NewServer(addr string, key string) (*Server, error) {
@@ -30,11 +31,12 @@ func NewServer(addr string, key string) (*Server, error) {
   self := &Server{
     ln: ln,
     connPools: make(map[uint64]*ConnPool),
-    New: make(chan *Session, CHAN_BUF_SIZE),
-    newConnChan: make(chan *net.TCPConn, CHAN_BUF_SIZE),
+    New: make(chan *Session),
+    newConnChan: NewInfiniteTCPConnChan(),
     stop: make(chan struct{}),
-    connPoolStopNotify: make(chan *ConnPool, CHAN_BUF_SIZE),
+    connPoolStopNotify: NewInfiniteConnPoolChan(),
   }
+  self.newSessionBuffer = NewInfiniteSessionChan(self.New)
 
   go self.startAcceptChan()
   go self.start(key)
@@ -51,7 +53,7 @@ func (self *Server) startAcceptChan() {
       }
       continue
     }
-    self.newConnChan <- conn
+    self.newConnChan.In <- conn
   }
 }
 
@@ -62,7 +64,7 @@ func (self *Server) start(key string) {
   LOOP:
   for { // listen for incoming connection
     select {
-    case conn := <-self.newConnChan:
+    case conn := <-self.newConnChan.Out:
       var clientId uint64
       err := binary.Read(conn, binary.BigEndian, &clientId)
       if err != nil {
@@ -70,17 +72,17 @@ func (self *Server) start(key string) {
       }
       if self.connPools[clientId] == nil {
         self.log("new conn pool from %d", clientId)
-        connPool := newConnPool(key, &(self.New))
+        connPool := newConnPool(key, &(self.newSessionBuffer.In))
         connPool.clientId = clientId
-        connPool.stopNotify = self.connPoolStopNotify
+        connPool.stopNotify = self.connPoolStopNotify.In
         self.connPools[clientId] = connPool
       }
-      self.connPools[clientId].newConnChan <- conn
+      self.connPools[clientId].newConnChan.In <- conn
 
     case <-heartBeat:
       self.log("tick %d %d conn pools", tick, len(self.connPools))
 
-    case connPool := <-self.connPoolStopNotify:
+    case connPool := <-self.connPoolStopNotify.Out:
       self.log("conn pool for client %d stop", connPool.clientId)
       delete(self.connPools, connPool.clientId)
 
@@ -94,6 +96,9 @@ func (self *Server) start(key string) {
   for _, connPool := range self.connPools {
     connPool.Stop()
   }
+  self.newSessionBuffer.Stop()
+  self.newConnChan.Stop()
+  self.connPoolStopNotify.Stop()
 }
 
 func (self *Server) Stop() {

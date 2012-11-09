@@ -16,9 +16,9 @@ type Session struct {
 
   incomingSerial uint32
   maxIncomingSerial uint32
-  incomingChan chan []byte
-  sendQueue chan ToSend
-  infoChan chan ToSend
+  incomingChan *InfiniteByteSliceChan
+  sendQueue *InfiniteToSendChan
+  infoChan *InfiniteToSendChan
   packets map[uint32][]byte
 
   readState int // for session cleaner
@@ -54,7 +54,7 @@ func newSession(id uint64, connPool *ConnPool) *Session {
     id: id,
 
     incomingSerial: 1,
-    incomingChan: make(chan []byte, CHAN_BUF_SIZE),
+    incomingChan: NewInfiniteByteSliceChan(),
     sendQueue: connPool.sendQueue,
     infoChan: connPool.infoChan,
     packets: make(map[uint32][]byte),
@@ -68,7 +68,7 @@ func newSession(id uint64, connPool *ConnPool) *Session {
 
     Message: make(chan Message),
     message: make(chan Message),
-    messageBuffer: make([]Message, 0, 65536),
+    messageBuffer: make([]Message, 0, INITIAL_BUF_CAPACITY),
     stopDeliver: make(chan struct{}),
   }
 
@@ -85,7 +85,7 @@ func (self *Session) start() {
   LOOP:
   for {
     select {
-    case packet := <-self.incomingChan:
+    case packet := <-self.incomingChan.Out:
       self.handleIncoming(packet)
     case <-heartBeat:
       self.showInfo()
@@ -98,6 +98,7 @@ func (self *Session) start() {
   }
 
   self.log("stop")
+  self.incomingChan.Stop()
 }
 
 func (self *Session) startMessageDeliver() {
@@ -138,7 +139,7 @@ func (self *Session) sendInfo() {
   binary.Write(buf, binary.BigEndian, cur) // current waiting serial
   binary.Write(buf, binary.BigEndian, max) // max received serial
 
-  self.infoChan <- ToSend{INFO, self, buf.Bytes()}
+  self.infoChan.In <- ToSend{INFO, self, buf.Bytes()}
 }
 
 func (self *Session) handleIncoming(packet []byte) {
@@ -263,7 +264,7 @@ func (self *Session) handleInfoPacket(data []byte) {
   }
 
   if curSerial <= self.serial && curSerial == self.lastRemoteCurSerial { // need to resend
-    self.sendQueue <- ToSend{INFO, self, self.packets[curSerial]}
+    self.sendQueue.In <- ToSend{INFO, self, self.packets[curSerial]}
   }
 
   self.lastRemoteHeartbeatTime = timestamp
@@ -296,7 +297,7 @@ func (self *Session) Send(data []byte) int {
   if self.remoteReadState == ABORT {
     return ABORT
   }
-  self.sendQueue <- ToSend{DATA, self, self.packData(data)}
+  self.sendQueue.In <- ToSend{DATA, self, self.packData(data)}
   return NORMAL
 }
 
@@ -304,24 +305,24 @@ func (self *Session) FinishSend() { // no more data will be send
   self.sendState = FINISH
   serialBuf := new(bytes.Buffer)
   binary.Write(serialBuf, binary.BigEndian, &self.serial)
-  self.sendQueue <- ToSend{STATE, self, self.packState(STATE_FINISH_SEND, serialBuf.Bytes())}
+  self.sendQueue.In <- ToSend{STATE, self, self.packState(STATE_FINISH_SEND, serialBuf.Bytes())}
 }
 
 func (self *Session) AbortSend() { // abort all pending data immediately
   self.sendState = ABORT
-  self.sendQueue <- ToSend{STATE, self, self.packState(STATE_ABORT_SEND, []byte{})}
+  self.sendQueue.In <- ToSend{STATE, self, self.packState(STATE_ABORT_SEND, []byte{})}
 }
 
 func (self *Session) FinishRead() { // no more data will be read
   self.readState = FINISH
   serialBuf := new(bytes.Buffer)
   binary.Write(serialBuf, binary.BigEndian, &self.serial)
-  self.sendQueue <- ToSend{STATE, self, self.packState(STATE_FINISH_READ, serialBuf.Bytes())}
+  self.sendQueue.In <- ToSend{STATE, self, self.packState(STATE_FINISH_READ, serialBuf.Bytes())}
 }
 
 func (self *Session) AbortRead() { // stop reading immediately
   self.readState = ABORT
-  self.sendQueue <- ToSend{STATE, self, self.packState(STATE_ABORT_READ, []byte{})}
+  self.sendQueue.In <- ToSend{STATE, self, self.packState(STATE_ABORT_READ, []byte{})}
 }
 
 func (self *Session) Stop() {

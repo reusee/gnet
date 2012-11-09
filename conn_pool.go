@@ -1,7 +1,6 @@
 package gnet
 
 import (
-  "net"
   "bytes"
   "encoding/binary"
   "time"
@@ -12,16 +11,16 @@ type ConnPool struct {
   stopNotify chan *ConnPool
 
   stop chan struct{}
-  newConnChan chan *net.TCPConn
-  deadConnNotify chan bool
-  deadConnChan chan *Conn
+  newConnChan *InfiniteTCPConnChan
+  deadConnNotify *InfiniteBoolChan
+  deadConnChan *InfiniteConnChan
 
   byteKeys []byte
   uint64Keys []uint64
 
-  sendQueue chan ToSend
-  infoChan chan ToSend
-  rawSendQueue chan []byte
+  sendQueue *InfiniteToSendChan
+  infoChan *InfiniteToSendChan
+  rawSendQueue *InfiniteByteSliceChan
 
   sessions map[uint64]*Session
   newSessionChan *chan *Session
@@ -35,12 +34,12 @@ type ConnPool struct {
 func newConnPool(key string, newSessionChan *chan *Session) *ConnPool {
   self := &ConnPool{
     stop: make(chan struct{}),
-    newConnChan: make(chan *net.TCPConn, CHAN_BUF_SIZE),
-    deadConnChan: make(chan *Conn, CHAN_BUF_SIZE),
+    newConnChan: NewInfiniteTCPConnChan(),
+    deadConnChan: NewInfiniteConnChan(),
 
-    sendQueue: make(chan ToSend, CHAN_BUF_SIZE),
-    infoChan: make(chan ToSend, CHAN_BUF_SIZE),
-    rawSendQueue: make(chan []byte, CHAN_BUF_SIZE),
+    sendQueue: NewInfiniteToSendChan(),
+    infoChan: NewInfiniteToSendChan(),
+    rawSendQueue: NewInfiniteByteSliceChan(),
 
     sessions: make(map[uint64]*Session),
     newSessionChan: newSessionChan,
@@ -63,14 +62,14 @@ func (self *ConnPool) start() {
   LOOP:
   for {
     select {
-    case tcpConn := <-self.newConnChan:
+    case tcpConn := <-self.newConnChan.Out:
       conn := newConn(tcpConn, self)
       self.conns[conn.id] = conn
       if len(self.conns) > self.maxConnNum {
         self.maxConnNum = len(self.conns)
       }
 
-    case info := <-self.infoChan:
+    case info := <-self.infoChan.Out:
       binary.Write(infoBuf, binary.BigEndian, info.session.id)
       infoBuf.Write(info.data)
 
@@ -81,7 +80,7 @@ func (self *ConnPool) start() {
       frame.Write([]byte{PACKET_TYPE_INFO})
       binary.Write(frame, binary.BigEndian, uint32(len(info)))
       frame.Write(info)
-      self.rawSendQueue <- frame.Bytes()
+      self.rawSendQueue.In <- frame.Bytes()
       infoBuf = new(bytes.Buffer)
 
       self.log("tick %d conns %d", tick, len(self.conns))
@@ -91,7 +90,7 @@ func (self *ConnPool) start() {
         break LOOP
       }
 
-    case conn := <-self.deadConnChan:
+    case conn := <-self.deadConnChan.Out:
       self.log("delete conn %d", conn.id)
       delete(self.conns, conn.id)
 
@@ -117,6 +116,12 @@ func (self *ConnPool) start() {
   if self.stopNotify != nil {
     self.stopNotify <- self
   }
+  // stop chans
+  self.rawSendQueue.Stop()
+  self.newConnChan.Stop()
+  self.deadConnChan.Stop()
+  self.sendQueue.Stop()
+  self.infoChan.Stop()
 }
 
 func (self *ConnPool) newSession(sessionId uint64) *Session {

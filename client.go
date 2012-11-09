@@ -21,7 +21,7 @@ type Client struct {
   livingConns int
   raddr *net.TCPAddr
 
-  deadConnNotify chan bool
+  deadConnNotify *InfiniteBoolChan
 }
 
 func NewClient(addr string, key string, conns int) (*Client, error) {
@@ -37,7 +37,7 @@ func NewClient(addr string, key string, conns int) (*Client, error) {
     conns: conns,
     raddr: raddr,
 
-    deadConnNotify: make(chan bool, CHAN_BUF_SIZE),
+    deadConnNotify: NewInfiniteBoolChan(),
   }
   self.connPool.deadConnNotify = self.deadConnNotify
 
@@ -58,7 +58,7 @@ func (self *Client) start() {
   LOOP:
   for {
     select {
-    case <-self.deadConnNotify:
+    case <-self.deadConnNotify.Out:
       if self.livingConns > 0 {
         self.livingConns--
       }
@@ -73,6 +73,7 @@ func (self *Client) start() {
 
   // finalizer
   self.connPool.Stop()
+  self.deadConnNotify.Stop()
 }
 
 func (self *Client) Stop() {
@@ -97,7 +98,7 @@ func (self *Client) connect(conns int) (err error) {
         return
       }
       binary.Write(conn, binary.BigEndian, self.id)
-      self.connPool.newConnChan <- conn
+      self.connPool.newConnChan.In <- conn
       self.livingConns++
     }()
   }

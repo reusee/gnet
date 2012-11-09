@@ -58,13 +58,13 @@ func (self *Conn) start() {
         break LOOP
       }
       self.handlePacket(packet)
-    case toSend := <-self.pool.sendQueue:
+    case toSend := <-self.pool.sendQueue.Out:
       err = self.handleSend(toSend)
       if err != nil {
         self.log("send error")
         break LOOP
       }
-    case data := <-self.pool.rawSendQueue:
+    case data := <-self.pool.rawSendQueue.Out:
       err = self.handleRawSend(data)
       if err != nil {
         self.log("raw send error")
@@ -85,9 +85,9 @@ func (self *Conn) start() {
 
   self.log("stop")
   if self.pool.deadConnNotify != nil {
-    self.pool.deadConnNotify <- true
+    self.pool.deadConnNotify.In <- true
   }
-  self.pool.deadConnChan <- self
+  self.pool.deadConnChan.In <- self
 }
 
 func (self *Conn) handlePacket(packet []byte) {
@@ -112,7 +112,7 @@ func (self *Conn) handleSessionPacket(packet []byte) {
   if session.closed {
     return
   }
-  session.incomingChan <- payload
+  session.incomingChan.In <- payload
 }
 
 func (self *Conn) handleInfoPacket(packet []byte) {
@@ -126,7 +126,7 @@ func (self *Conn) handleInfoPacket(packet []byte) {
       continue
     }
     payload := packet[i * entryLen + 8 : (i + 1) * entryLen]
-    session.incomingChan <- payload
+    session.incomingChan.In <- payload
   }
 }
 
@@ -137,7 +137,7 @@ func (self *Conn) handleSend(toSend ToSend) error {
   err := writeFrame(self.conn,
     assembleSessionPacket(toSend.session.id, toSend.data, self.pool.byteKeys, self.pool.uint64Keys))
   if err != nil {
-    self.pool.sendQueue <- toSend
+    self.pool.sendQueue.In <- toSend
     return err
   }
   return nil
@@ -146,7 +146,7 @@ func (self *Conn) handleSend(toSend ToSend) error {
 func (self *Conn) handleRawSend(data []byte) error {
   err := writeFrame(self.conn, data)
   if err != nil {
-    self.pool.rawSendQueue <- data
+    self.pool.rawSendQueue.In <- data
     return err
   }
   return nil

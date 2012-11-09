@@ -7,7 +7,7 @@ import (
 type PacketQueue []*Packet
 
 func newPacketQueue() PacketQueue {
-  packetQueue := make(PacketQueue, 0, CHAN_BUF_SIZE)
+  packetQueue := make(PacketQueue, 0, INITIAL_BUF_CAPACITY)
   heap.Init(&packetQueue)
   return packetQueue
 }
