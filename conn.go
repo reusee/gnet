@@ -21,7 +21,7 @@ func newConn(conn *net.TCPConn, connPool *ConnPool) *Conn {
     id: uint64(rand.Int63()),
     conn: conn,
     pool: connPool,
-    in: make(chan []byte, CHAN_BUF_SIZE),
+    in: make(chan []byte),
     stop: make(chan struct{}),
   }
 
@@ -36,6 +36,7 @@ func (self *Conn) startReadChan() {
   for {
     data, err := readFrame(self.conn)
     if err != nil {
+      self.log("tcp conn read error %v\n", err)
       return
     }
     self.in <- data
@@ -44,6 +45,7 @@ func (self *Conn) startReadChan() {
 
 func (self *Conn) start() {
   self.log("start")
+
   heartBeat := time.Tick(time.Second * 2)
   tick := 0
   var err error
@@ -51,23 +53,36 @@ func (self *Conn) start() {
   for {
     select {
     case packet, ok := <-self.in: // read from conn
-      if !ok { break LOOP }
+      if !ok {
+        self.log("read error")
+        break LOOP
+      }
       self.handlePacket(packet)
     case toSend := <-self.pool.sendQueue:
       err = self.handleSend(toSend)
-      if err != nil { break LOOP }
+      if err != nil {
+        self.log("send error")
+        break LOOP
+      }
     case data := <-self.pool.rawSendQueue:
       err = self.handleRawSend(data)
-      if err != nil { break LOOP }
+      if err != nil {
+        self.log("raw send error")
+        break LOOP
+      }
     case <-heartBeat:
       err = self.ping()
-      if err != nil { break LOOP }
+      if err != nil {
+        self.log("ping error")
+        break LOOP
+      }
       self.log("tick %d", tick)
     case <-self.stop:
-      break LOOP
+      return
     }
     tick++
   }
+
   self.log("stop")
   if self.pool.deadConnNotify != nil {
     self.pool.deadConnNotify <- true
@@ -83,6 +98,8 @@ func (self *Conn) handlePacket(packet []byte) {
   case PACKET_TYPE_INFO:
     self.handleInfoPacket(packet[1:])
   case PACKET_TYPE_PING:
+  default:
+    self.log("unknown packet type %d\n", packetType)
   }
 }
 

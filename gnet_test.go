@@ -12,13 +12,13 @@ func TestNew(t *testing.T) {
   if err != nil {
     t.Fatal(err)
   }
-  defer server.Close()
+  defer server.Stop()
 
   client, err := NewClient("localhost:8888", "abcd", 1)
   if err != nil {
     t.Fatal(err)
   }
-  defer client.Close()
+  defer client.Stop()
 
   n := 2000
 
@@ -48,13 +48,13 @@ func TestSessionAbort(t *testing.T) {
   if err != nil {
     t.Fatal(err)
   }
-  defer server.Close()
+  defer server.Stop()
 
   client, err := NewClient("localhost:8700", "abc", 1)
   if err != nil {
     t.Fatal(err)
   }
-  defer client.Close()
+  defer client.Stop()
 
   clientSession := client.NewSession()
 
@@ -106,13 +106,13 @@ func TestSessionFinish(t *testing.T) {
   if err != nil {
     t.Fatal(err)
   }
-  defer server.Close()
+  defer server.Stop()
 
   client, err := NewClient("localhost:8710", "abc", 1)
   if err != nil {
     t.Fatal(err)
   }
-  defer client.Close()
+  defer client.Stop()
 
   clientSession := client.NewSession()
 

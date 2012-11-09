@@ -33,6 +33,9 @@ type Session struct {
   packetQueue PacketQueue
 
   Message chan Message
+  messageBuffer []Message
+  message chan Message
+  stopDeliver chan struct{}
 
   lastRemoteHeartbeatTime uint32
   lastRemoteCurSerial uint32
@@ -63,12 +66,14 @@ func newSession(id uint64, connPool *ConnPool) *Session {
 
     packetQueue: newPacketQueue(),
 
-    Message: make(chan Message, CHAN_BUF_SIZE),
+    Message: make(chan Message),
+    message: make(chan Message),
+    messageBuffer: make([]Message, 0, 65536),
+    stopDeliver: make(chan struct{}),
   }
 
+  go self.startMessageDeliver()
   go self.start()
-
-  //go self.startReceive()
 
   return self
 }
@@ -93,6 +98,28 @@ func (self *Session) start() {
   }
 
   self.log("stop")
+}
+
+func (self *Session) startMessageDeliver() {
+  for {
+    if len(self.messageBuffer) > 0 {
+      select {
+      case self.Message <- self.messageBuffer[0]:
+        self.messageBuffer = self.messageBuffer[1:]
+      case value := <-self.message:
+        self.messageBuffer = append(self.messageBuffer, value)
+      case <-self.stopDeliver:
+        return
+      }
+    } else {
+      select {
+      case value := <-self.message:
+        self.messageBuffer = append(self.messageBuffer, value)
+      case <-self.stopDeliver:
+        return
+      }
+    }
+  }
 }
 
 func (self *Session) showInfo() {
@@ -169,11 +196,12 @@ func (self *Session) handleDataPacket(data []byte) {
 }
 
 func (self *Session) pushData(packet Packet) {
-  self.Message <- Message{
+  message := Message{
     Tag: DATA,
     Data: packet.data,
     Time: time.Now(),
   }
+  self.message <- message
   if self.remoteReadState == FINISH && packet.serial >= self.remoteReadFinishAt {
     self.pushState(STATE_FINISH_READ)
   }
@@ -183,7 +211,7 @@ func (self *Session) pushData(packet Packet) {
 }
 
 func (self *Session) pushState(state byte) {
-  self.Message <- Message{
+  self.message <- Message{
     Tag: STATE,
     State: state,
     Time: time.Now(),
