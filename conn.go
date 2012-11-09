@@ -3,199 +3,147 @@ package gnet
 import (
   "net"
   "encoding/binary"
-  "io"
   "bytes"
-  "sync/atomic"
   "time"
+  "math/rand"
 )
 
 type Conn struct {
+  id uint64
   conn *net.TCPConn
   pool *ConnPool
-
-  heartBeat *Ticker
-
-  readerStopped chan bool
-  writerStopped chan bool
-
-  err bool
+  in chan []byte
+  stop chan struct{}
 }
 
 func newConn(conn *net.TCPConn, connPool *ConnPool) *Conn {
   self := &Conn{
+    id: uint64(rand.Int63()),
     conn: conn,
     pool: connPool,
-
-    heartBeat: NewTicker(time.Second * 10),
-
-    readerStopped: make(chan bool, 1),
-    writerStopped: make(chan bool, 1),
+    in: make(chan []byte, CHAN_BUF_SIZE),
+    stop: make(chan struct{}),
   }
 
-  go self.startReader()
-  go self.startWriter()
+  go self.startReadChan()
+  go self.start()
 
   return self
 }
 
-func (self *Conn) startReader() {
-  defer func() {
-    self.readerStopped <- true
-  }()
+func (self *Conn) startReadChan() {
+  defer close(self.in)
   for {
-    var packetType byte
-    p(">\n")
-    err := binary.Read(self.conn, binary.BigEndian, &packetType)
-    p(">>\n")
+    data, err := readFrame(self.conn)
     if err != nil {
-      self.err = true
       return
     }
-    p(">>>\n")
-
-    switch packetType {
-
-    case PACKET_TYPE_SESSION:
-      payload, sessionId, err := self.readSessionFrame()
-      if err != nil {
-        self.err = true
-        return
-      }
-      session := self.pool.sessions[sessionId]
-      if session == nil { // create new session
-        session = self.pool.newSession(sessionId)
-      }
-      if session.closed {
-        continue
-      }
-      session.incomingChan <- payload
-
-    case PACKET_TYPE_INFO:
-      var frameLen uint32
-      err = binary.Read(self.conn, binary.BigEndian, &frameLen)
-      if err != nil {
-        self.err = true
-        return
-      }
-      frame := make([]byte, frameLen)
-      _, err := io.ReadFull(self.conn, frame)
-      if err != nil {
-        self.err = true
-        return
-      }
-      var sessionId uint64
-      frames := int(frameLen / 21)
-      for i := 0; i < frames; i++ {
-        binary.Read(bytes.NewReader(frame[i * 21: i * 21 + 8]), binary.BigEndian, &sessionId)
-        session := self.pool.sessions[sessionId]
-        if session == nil {
-          continue
-        }
-        if session.closed {
-          continue
-        }
-        sessionFrame := frame[i * 21 + 8: (i + 1) * 21]
-        session.incomingChan <- sessionFrame
-      }
-
-    case PACKET_TYPE_PING:
-    }
+    self.in <- data
   }
 }
 
-func (self *Conn) readSessionFrame() ([]byte, uint64, error) {
-  var sessionId uint64
-  err := binary.Read(self.conn, binary.BigEndian, &sessionId)
-  if err != nil {
-    self.err = true
-    return nil, 0, err
-  }
-
-  var frameLen uint32
-  err = binary.Read(self.conn, binary.BigEndian, &frameLen)
-  if err != nil {
-    self.err = true
-    return nil, 0, err
-  }
-  atomic.AddUint64(&self.pool.bytesRead, uint64(frameLen))
-
-  encrypted := make([]byte, frameLen)
-  _, err = io.ReadFull(self.conn, encrypted)
-  if err != nil {
-    self.err = true
-    return nil, 0, err
-  }
-
-  frame := make([]byte, frameLen)
-  xorSlice(encrypted, frame, int(frameLen), int(frameLen) % 8, self.pool.byteKeys, self.pool.uint64Keys)
-
-  return frame, sessionId, nil
-}
-
-func (self *Conn) startWriter() {
-  defer func() {
-    self.writerStopped <- true
-  }()
+func (self *Conn) start() {
+  self.log("start")
+  heartBeat := time.Tick(time.Second * 2)
+  tick := 0
   var err error
+  LOOP:
   for {
     select {
+    case packet, ok := <-self.in: // read from conn
+      if !ok { break LOOP }
+      self.handlePacket(packet)
     case toSend := <-self.pool.sendQueue:
-      if toSend.session.remoteReadState == ABORT {
-        continue
-      }
-      frame := self.packSessionFrame(toSend)
-      _, err = self.conn.Write(frame)
-      if err != nil {
-        self.err = true
-        self.pool.sendQueue <- toSend
-        return
-      }
-      atomic.AddUint64(&self.pool.bytesWrite, uint64(len(frame)))
-
-    case frame := <-self.pool.rawSendChan:
-      _, err := self.conn.Write(frame)
-      if err != nil {
-        self.err = true
-        return
-      }
-
-    case _, ok := <-self.heartBeat.C:
-      if !ok {
-        return
-      }
-      _, err := self.conn.Write([]byte{PACKET_TYPE_PING})
-      if err != nil {
-        self.err = true
-        return
-      }
-      atomic.AddUint64(&self.pool.bytesWrite, uint64(1))
+      err = self.handleSend(toSend)
+      if err != nil { break LOOP }
+    case data := <-self.pool.rawSendQueue:
+      err = self.handleRawSend(data)
+      if err != nil { break LOOP }
+    case <-heartBeat:
+      err = self.ping()
+      if err != nil { break LOOP }
+      self.log("tick %d", tick)
+    case <-self.stop:
+      break LOOP
     }
+    tick++
+  }
+  self.log("stop")
+  if self.pool.deadConnNotify != nil {
+    self.pool.deadConnNotify <- true
+  }
+  self.pool.deadConnChan <- self
+}
+
+func (self *Conn) handlePacket(packet []byte) {
+  packetType := packet[0]
+  switch packetType {
+  case PACKET_TYPE_SESSION:
+    self.handleSessionPacket(packet[1:])
+  case PACKET_TYPE_INFO:
+    self.handleInfoPacket(packet[1:])
+  case PACKET_TYPE_PING:
   }
 }
 
-func (self *Conn) packSessionFrame(toSend ToSend) []byte {
-  sessionId, frame := toSend.session.id, toSend.frame
-  frameLen := len(frame)
-  pack := make([]byte, 1 + 8 + 4 + frameLen)
-  pack[0] = PACKET_TYPE_SESSION // packet type
-  buf := new(bytes.Buffer)
-  binary.Write(buf, binary.BigEndian, sessionId) // session id
-  binary.Write(buf, binary.BigEndian, uint32(frameLen)) // frame length
-  copy(pack[1:13], buf.Bytes()[:12])
-  xorSlice(frame, pack[13:], frameLen, frameLen % 8, self.pool.byteKeys, self.pool.uint64Keys)
-  return pack
+func (self *Conn) handleSessionPacket(packet []byte) {
+  payload, sessionId := parseSessionPacket(packet, self.pool.byteKeys, self.pool.uint64Keys)
+  session := self.pool.sessions[sessionId]
+  if session == nil {
+    session = self.pool.newSession(sessionId)
+  }
+  if session.closed {
+    return
+  }
+  session.incomingChan <- payload
 }
 
-func (self *Conn) Close() {
+func (self *Conn) handleInfoPacket(packet []byte) {
+  var sessionId uint64
+  entryLen := 21
+  entryNum := int(len(packet) / entryLen)
+  for i := 0; i < entryNum; i++ {
+    binary.Read(bytes.NewReader(packet[i * entryLen : i * entryLen + 8]), binary.BigEndian, &sessionId)
+    session := self.pool.sessions[sessionId]
+    if session == nil || session.closed {
+      continue
+    }
+    payload := packet[i * entryLen + 8 : (i + 1) * entryLen]
+    session.incomingChan <- payload
+  }
+}
+
+func (self *Conn) handleSend(toSend ToSend) error {
+  if toSend.tag == DATA && toSend.session.remoteReadState == ABORT {
+    return nil
+  }
+  err := writeFrame(self.conn,
+    assembleSessionPacket(toSend.session.id, toSend.data, self.pool.byteKeys, self.pool.uint64Keys))
+  if err != nil {
+    self.pool.sendQueue <- toSend
+    return err
+  }
+  return nil
+}
+
+func (self *Conn) handleRawSend(data []byte) error {
+  err := writeFrame(self.conn, data)
+  if err != nil {
+    self.pool.rawSendQueue <- data
+    return err
+  }
+  return nil
+}
+
+func (self *Conn) ping() error {
+  return writeFrame(self.conn, []byte{PACKET_TYPE_PING})
+}
+
+func (self *Conn) Stop() {
   self.conn.Close()
-  self.heartBeat.Stop()
-  self.log("told reader to stop\n")
-  <-self.readerStopped
-  self.log("reader stopped\n")
-  <-self.writerStopped
-  self.log("writer stopped\n")
+  close(self.stop)
 }
 
 func (self *Conn) log(f string, vars ...interface{}) {
-  p("CONN " + f, vars...)
+  colorp("33", ps("CONN %d ", self.id) + f, vars...)
 }

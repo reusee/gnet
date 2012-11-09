@@ -21,11 +21,15 @@ const (
   STATE_FINISH_READ = byte(2)
   STATE_ABORT_READ = byte(3)
 
+  IDLE_TIME_BEFORE_SESSION_CLOSE = time.Minute * 30
+
   NORMAL = iota
   FINISH
   ABORT
 
-  IDLE_TIME_BEFORE_SESSION_CLOSE = time.Minute * 30
+  DATA
+  STATE
+  INFO
 )
 
 func p(f string, vars ...interface{}) {
@@ -66,4 +70,8 @@ func (self *Ticker) Stop() {
   self.closed = true
   close(self.C)
   self.ticker.Stop()
+}
+
+func colorp(color string, s string, vars... interface{}) {
+  println("\033[" + color + "m" + fmt.Sprintf(s, vars...) + "\033[0m")
 }

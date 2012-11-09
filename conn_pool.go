@@ -8,42 +8,44 @@ import (
 )
 
 type ConnPool struct {
+  clientId uint64
+  stopNotify chan *ConnPool
+
+  stop chan struct{}
   newConnChan chan *net.TCPConn
   deadConnNotify chan bool
+  deadConnChan chan *Conn
 
   byteKeys []byte
   uint64Keys []uint64
 
   sendQueue chan ToSend
   infoChan chan ToSend
-  rawSendChan chan []byte
+  rawSendQueue chan []byte
 
   sessions map[uint64]*Session
   newSessionChan *chan *Session
 
-  bytesRead uint64
-  bytesWrite uint64
-
-  conns []*Conn
+  conns map[uint64]*Conn
+  maxConnNum int
 
   closed bool
-  heartBeat *Ticker
 }
 
 func newConnPool(key string, newSessionChan *chan *Session) *ConnPool {
   self := &ConnPool{
+    stop: make(chan struct{}),
     newConnChan: make(chan *net.TCPConn, CHAN_BUF_SIZE),
+    deadConnChan: make(chan *Conn, CHAN_BUF_SIZE),
 
     sendQueue: make(chan ToSend, CHAN_BUF_SIZE),
     infoChan: make(chan ToSend, CHAN_BUF_SIZE),
-    rawSendChan: make(chan []byte, CHAN_BUF_SIZE),
+    rawSendQueue: make(chan []byte, CHAN_BUF_SIZE),
 
     sessions: make(map[uint64]*Session),
     newSessionChan: newSessionChan,
 
-    conns: make([]*Conn, 0, 64),
-
-    heartBeat: NewTicker(time.Second * 3),
+    conns: make(map[uint64]*Conn),
   }
   self.byteKeys, self.uint64Keys = calculateKeys(key)
 
@@ -53,43 +55,67 @@ func newConnPool(key string, newSessionChan *chan *Session) *ConnPool {
 }
 
 func (self *ConnPool) start() {
-  var bytesWrite, bytesRead uint64
+  self.log("start")
   infoBuf := new(bytes.Buffer)
+  heartBeat := time.Tick(time.Second * 2)
+  tick := 0
 
+  LOOP:
   for {
     select {
-    case conn, ok := <-self.newConnChan:
-      if !ok {
-        return
+    case tcpConn := <-self.newConnChan:
+      conn := newConn(tcpConn, self)
+      self.conns[conn.id] = conn
+      if len(self.conns) > self.maxConnNum {
+        self.maxConnNum = len(self.conns)
       }
-      self.conns = append(self.conns, newConn(conn, self))
 
-    case info, ok := <-self.infoChan:
-      if !ok {
-        return
-      }
+    case info := <-self.infoChan:
       binary.Write(infoBuf, binary.BigEndian, info.session.id)
-      infoBuf.Write(info.frame)
+      infoBuf.Write(info.data)
 
-    case _, ok := <-self.heartBeat.C:
-      if !ok {
-        return
-      }
-
-      curBytesRead, curBytesWrite := self.bytesRead, self.bytesWrite
-      self.log("read %d / %d write %d / %d\n",
-      curBytesRead - bytesRead, curBytesRead,
-      curBytesWrite - bytesWrite, curBytesWrite)
-      bytesWrite, bytesRead = curBytesWrite, curBytesRead
-
+    case <-heartBeat:
+      // send session infos
       info := infoBuf.Bytes()
       frame := new(bytes.Buffer)
       frame.Write([]byte{PACKET_TYPE_INFO})
       binary.Write(frame, binary.BigEndian, uint32(len(info)))
       frame.Write(info)
-      self.rawSendChan <- frame.Bytes()
+      self.rawSendQueue <- frame.Bytes()
       infoBuf = new(bytes.Buffer)
+
+      self.log("tick %d conns %d", tick, len(self.conns))
+
+      if self.maxConnNum > 0 && len(self.conns) == 0 { // client disconnected
+        self.log("client disconnected")
+        break LOOP
+      }
+
+    case conn := <-self.deadConnChan:
+      self.log("delete conn %d", conn.id)
+      delete(self.conns, conn.id)
+
+    case <-self.stop:
+      break LOOP
     }
+    tick++
+  }
+
+  // finalizer
+  self.log("stop")
+  self.closed = true
+  // stop conns
+  for _, conn := range self.conns {
+    conn.Stop()
+  }
+  // stop sessions
+  for serial, session := range self.sessions {
+    session.Stop()
+    delete(self.sessions, serial)
+  }
+  // notify 
+  if self.stopNotify != nil {
+    self.stopNotify <- self
   }
 }
 
@@ -102,23 +128,10 @@ func (self *ConnPool) newSession(sessionId uint64) *Session {
   return session
 }
 
-func (self *ConnPool) Close() {
-  self.closed = true
-  for _, conn := range self.conns {
-    //TODO 有些conn是失效了的，或者已经close了
-    conn.Close()
-  }
-  self.log("connections stopped\n")
-  for serial, session := range self.sessions {
-    session.stop()
-    delete(self.sessions, serial)
-  }
-  self.log("sessions stopped\n")
-  close(self.infoChan)
-  close(self.newConnChan)
-  self.heartBeat.Stop()
+func (self *ConnPool) Stop() {
+  close(self.stop)
 }
 
 func (self *ConnPool) log(f string, vars ...interface{}) {
-  p("CONNPOOL " + f, vars...)
+  colorp("34", "CONNPOOL " + f, vars...)
 }

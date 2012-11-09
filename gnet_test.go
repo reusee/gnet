@@ -14,11 +14,11 @@ func TestNew(t *testing.T) {
   }
   defer server.Close()
 
-  client, err := NewClient("localhost:8888", "abcd", 2)
+  client, err := NewClient("localhost:8888", "abcd", 1)
   if err != nil {
     t.Fatal(err)
   }
-  //defer client.Close()
+  defer client.Close()
 
   n := 2000
 
@@ -26,13 +26,14 @@ func TestNew(t *testing.T) {
     session := client.NewSession()
     for i := 0; i < n; i++ {
       session.Send([]byte(fmt.Sprintf("%d", i)))
-      <-session.Data
+      <-session.Message
     }
   }()
 
   session := <-server.New
   for i := 0; i < n; i++ {
-    data := <-session.Data
+    data := (<-session.Message).Data
+    p("%s\n", data)
     expected := []byte(fmt.Sprintf("%d", i))
     if bytes.Compare(data, expected) != 0 {
       t.Fatal("wrong seq")
@@ -49,22 +50,30 @@ func TestSessionAbort(t *testing.T) {
   }
   defer server.Close()
 
-  client, err := NewClient("localhost:8700", "abc", 64)
+  client, err := NewClient("localhost:8700", "abc", 1)
   if err != nil {
     t.Fatal(err)
   }
-  //defer client.Close()
+  defer client.Close()
+
+  clientSession := client.NewSession()
 
   go func() {
     session := <-server.New
+    c := 0
     for {
-      select {
-      case data := <-session.Data:
-        p("%s ", data)
+      msg := <-session.Message
+      switch msg.Tag {
+      case DATA:
+        data := msg.Data
         session.Send(data)
-      case state := <-session.State:
-        if state == STATE_ABORT_SEND {
-          fmt.Printf("client abort send. quit\n")
+        c++
+        if c > 100 {
+          clientSession.AbortSend()
+        }
+      case STATE:
+        if msg.State == STATE_ABORT_SEND {
+          fmt.Printf("\nclient abort send. quit\n")
           session.AbortRead()
           return
         }
@@ -72,19 +81,20 @@ func TestSessionAbort(t *testing.T) {
     }
   }()
 
-  session := client.NewSession()
   for i := 0; i < 200; i++ {
-    session.Send([]byte(fmt.Sprintf("%d", i)))
+    clientSession.Send([]byte(fmt.Sprintf("%d", i)))
   }
-  session.AbortSend()
   var data []byte
-  LOOP: for {
-    select {
-    case data = <-session.Data:
-    case state := <-session.State:
-      if state == STATE_ABORT_READ {
-        fmt.Printf("server abort read. quit. last echo %s\n", data)
-        break LOOP
+  for {
+    msg := <-clientSession.Message
+    switch msg.Tag {
+    case DATA:
+      data = msg.Data
+      p("%s ", data)
+    case STATE:
+      if msg.State == STATE_ABORT_READ {
+        fmt.Printf("\nserver abort read. quit. last echo %s\n", data)
+        return
       }
     }
   }
@@ -98,44 +108,51 @@ func TestSessionFinish(t *testing.T) {
   }
   defer server.Close()
 
-  client, err := NewClient("localhost:8710", "abc", 2)
+  client, err := NewClient("localhost:8710", "abc", 1)
   if err != nil {
     t.Fatal(err)
   }
-  //defer client.Close()
+  defer client.Close()
+
+  clientSession := client.NewSession()
 
   go func() {
     session := <-server.New
+    c := 0
     for {
-      select {
-      case data := <-session.Data:
-        p("%s ", data)
+      msg := <-session.Message
+      switch msg.Tag {
+      case DATA:
+        data := msg.Data
         session.Send(data)
-      case state := <-session.State:
-        if state == STATE_FINISH_SEND {
-          fmt.Printf("client finish send. quit\n")
-          session.FinishRead()
+        c++
+        if c > 100 {
+          clientSession.AbortSend()
+        }
+      case STATE:
+        if msg.State == STATE_ABORT_SEND {
+          fmt.Printf("\nclient abort send. quit\n")
+          session.AbortRead()
           return
         }
       }
     }
   }()
 
-  session := client.NewSession()
   for i := 0; i < 200; i++ {
-    data := []byte(fmt.Sprintf("%d", i))
-    session.Send(data)
+    clientSession.Send([]byte(fmt.Sprintf("%d", i)))
   }
-  session.FinishSend()
   var data []byte
-  LOOP:
   for {
-    select {
-    case data = <-session.Data:
-    case state := <-session.State:
-      if state == STATE_FINISH_READ {
-        fmt.Printf("server finish read. quit. last echo %s\n", data)
-        break LOOP
+    msg := <-clientSession.Message
+    switch msg.Tag {
+    case DATA:
+      data = msg.Data
+      p("%s ", data)
+    case STATE:
+      if msg.State == STATE_ABORT_READ {
+        fmt.Printf("\nserver abort read. quit. last echo %s\n", data)
+        return
       }
     }
   }

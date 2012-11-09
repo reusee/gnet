@@ -9,10 +9,10 @@ import (
 )
 
 type Session struct {
+  stop chan struct{}
   id uint64
   serial uint32
   closed bool
-  heartBeat *Ticker
 
   incomingSerial uint32
   maxIncomingSerial uint32
@@ -32,30 +32,23 @@ type Session struct {
 
   packetQueue PacketQueue
 
-  dataBuffer chan Packet
-  fetchedSerial uint32
-  Data chan []byte
-  State chan byte
+  Message chan Message
 
   lastRemoteHeartbeatTime uint32
   lastRemoteCurSerial uint32
   lastRemoteMaxSerial uint32
-
-  stopProvideData chan bool
-  receiveStopped chan bool
-  providerStopped chan bool
-  heartBeatStopped chan bool
 }
 
 type ToSend struct {
+  tag int
   session *Session
-  frame []byte
+  data []byte
 }
 
 func newSession(id uint64, connPool *ConnPool) *Session {
   self := &Session{
+    stop: make(chan struct{}),
     id: id,
-    heartBeat: NewTicker(time.Second * 2),
 
     incomingSerial: 1,
     incomingChan: make(chan []byte, CHAN_BUF_SIZE),
@@ -70,21 +63,67 @@ func newSession(id uint64, connPool *ConnPool) *Session {
 
     packetQueue: newPacketQueue(),
 
-    dataBuffer: make(chan Packet, CHAN_BUF_SIZE),
-    Data: make(chan []byte),
-    State: make(chan byte, CHAN_BUF_SIZE),
-
-    stopProvideData: make(chan bool, 1),
-    receiveStopped: make(chan bool, 1),
-    providerStopped: make(chan bool, 1),
-    heartBeatStopped: make(chan bool, 1),
+    Message: make(chan Message, CHAN_BUF_SIZE),
   }
 
-  go self.startHeartBeat()
-  go self.startDataProvider()
-  go self.startReceive()
+  go self.start()
+
+  //go self.startReceive()
 
   return self
+}
+
+func (self *Session) start() {
+  self.log("strat")
+  heartBeat := time.Tick(time.Second * 2)
+  tick := 0
+  LOOP:
+  for {
+    select {
+    case packet := <-self.incomingChan:
+      self.handleIncoming(packet)
+    case <-heartBeat:
+      self.showInfo()
+      self.sendInfo()
+      self.log("tick %d", tick)
+    case <-self.stop:
+      break LOOP
+    }
+    tick++
+  }
+
+  self.log("stop")
+}
+
+func (self *Session) showInfo() {
+  cur, max, count := self.incomingSerial, self.maxIncomingSerial, self.incomingDataCount
+  if cur < max {
+    self.log("packet gap %d %d %d", cur, max, count)
+  }
+}
+
+func (self *Session) sendInfo() {
+  cur, max := self.incomingSerial, self.maxIncomingSerial
+  buf := new(bytes.Buffer)
+  buf.Write([]byte{SESSION_PACKET_TYPE_INFO}) // packet type
+
+  binary.Write(buf, binary.BigEndian, uint32(time.Now().Unix())) // timestamp
+  binary.Write(buf, binary.BigEndian, cur) // current waiting serial
+  binary.Write(buf, binary.BigEndian, max) // max received serial
+
+  self.infoChan <- ToSend{INFO, self, buf.Bytes()}
+}
+
+func (self *Session) handleIncoming(packet []byte) {
+  packetType := packet[0]
+  switch packetType {
+  case SESSION_PACKET_TYPE_DATA:
+    self.handleDataPacket(packet[1:])
+  case SESSION_PACKET_TYPE_STATE:
+    self.handleStatePacket(packet[1:])
+  case SESSION_PACKET_TYPE_INFO:
+    self.handleInfoPacket(packet[1:])
+  }
 }
 
 type Packet struct {
@@ -93,71 +132,11 @@ type Packet struct {
   index int
 }
 
-func (self *Session) startHeartBeat() {
-  defer func() {
-    self.heartBeatStopped <- true
-    self.log("heartbeat stopped\n")
-  }()
-  for {
-    _, ok := <-self.heartBeat.C
-    if !ok {
-      break
-    }
-    cur, max, count := self.incomingSerial, self.maxIncomingSerial, self.incomingDataCount
-    if cur < max {
-      self.log("packet gap %d %d %d\n", cur, max, count)
-    }
-
-    self.sendInfo(cur, max)
-  }
-}
-
-func (self *Session) startDataProvider() {
-  defer func() {
-    self.providerStopped <- true
-    self.log("provider stopped\n")
-  }()
-  for {
-    packet, ok := <-self.dataBuffer
-    if !ok {
-      return
-    }
-    serial, data := packet.serial, packet.data
-    select {
-    case self.Data <- data:
-    case <-self.stopProvideData:
-      return
-    }
-    self.fetchedSerial = serial
-    if self.remoteReadState == FINISH && serial >= self.remoteReadFinishAt {
-      self.State <- STATE_FINISH_READ
-    }
-    if self.remoteSendState == FINISH && serial >= self.remoteSendFinishAt {
-      self.State <- STATE_FINISH_SEND
-    }
-  }
-}
-
-func (self *Session) startReceive() {
-  defer func() {
-    self.receiveStopped <- true
-    self.log("receive stopped\n")
-  }()
-  for {
-    frame, ok := <-self.incomingChan
-    if !ok {
-      return
-    }
-    packetType := frame[0]
-    switch packetType {
-    case SESSION_PACKET_TYPE_DATA:
-      self.handleDataPacket(frame[1:])
-    case SESSION_PACKET_TYPE_STATE:
-      self.handleStatePacket(frame[1:])
-    case SESSION_PACKET_TYPE_INFO:
-      self.handleInfoPacket(frame[1:])
-    }
-  }
+type Message struct {
+  Tag int
+  Data []byte
+  State byte
+  Time time.Time
 }
 
 func (self *Session) handleDataPacket(data []byte) {
@@ -169,7 +148,7 @@ func (self *Session) handleDataPacket(data []byte) {
 
   packet := Packet{serial: serial, data: data}
   if serial == self.incomingSerial {
-    self.dataBuffer <- packet
+    self.pushData(packet)
     self.incomingSerial++
   } else if serial > self.incomingSerial {
     heap.Push(&self.packetQueue, &packet)
@@ -180,12 +159,34 @@ func (self *Session) handleDataPacket(data []byte) {
   for len(self.packetQueue) > 0 {
     next := heap.Pop(&self.packetQueue).(*Packet)
     if next.serial == self.incomingSerial {
-      self.dataBuffer <- *next
+      self.pushData(*next)
       self.incomingSerial++
     } else {
       heap.Push(&self.packetQueue, next)
       break
     }
+  }
+}
+
+func (self *Session) pushData(packet Packet) {
+  self.Message <- Message{
+    Tag: DATA,
+    Data: packet.data,
+    Time: time.Now(),
+  }
+  if self.remoteReadState == FINISH && packet.serial >= self.remoteReadFinishAt {
+    self.pushState(STATE_FINISH_READ)
+  }
+  if self.remoteSendState == FINISH && packet.serial >= self.remoteSendFinishAt {
+    self.pushState(STATE_ABORT_SEND)
+  }
+}
+
+func (self *Session) pushState(state byte) {
+  self.Message <- Message{
+    Tag: STATE,
+    State: state,
+    Time: time.Now(),
   }
 }
 
@@ -197,23 +198,23 @@ func (self *Session) handleStatePacket(frame []byte) {
     var serial uint32
     binary.Read(bytes.NewReader(frame[1:]), binary.BigEndian, &serial)
     self.remoteSendFinishAt = serial
-    if self.remoteSendState == FINISH && self.fetchedSerial >= self.remoteSendFinishAt {
-      self.State <- STATE_FINISH_SEND
+    if self.remoteSendState == FINISH && self.incomingSerial >= self.remoteSendFinishAt {
+      self.pushState(STATE_FINISH_SEND)
     }
   case STATE_FINISH_READ:
     self.remoteReadState = FINISH
     var serial uint32
     binary.Read(bytes.NewReader(frame[1:]), binary.BigEndian, &serial)
     self.remoteReadFinishAt = serial
-    if self.remoteReadState == FINISH && self.fetchedSerial >= self.remoteReadFinishAt {
-      self.State <- STATE_FINISH_READ
+    if self.remoteReadState == FINISH && self.incomingSerial >= self.remoteReadFinishAt {
+      self.pushState(STATE_FINISH_READ)
     }
   case STATE_ABORT_SEND: // drop all received packet
     self.remoteSendState = ABORT
-    self.State <- STATE_ABORT_SEND
+    self.pushState(STATE_ABORT_SEND)
   case STATE_ABORT_READ: // drop all outgoing packet
     self.remoteReadState = ABORT
-    self.State <- STATE_ABORT_READ
+    self.pushState(STATE_ABORT_READ)
   }
 }
 
@@ -234,7 +235,7 @@ func (self *Session) handleInfoPacket(data []byte) {
   }
 
   if curSerial <= self.serial && curSerial == self.lastRemoteCurSerial { // need to resend
-    self.sendQueue <- ToSend{self, self.packets[curSerial]}
+    self.sendQueue <- ToSend{INFO, self, self.packets[curSerial]}
   }
 
   self.lastRemoteHeartbeatTime = timestamp
@@ -263,22 +264,11 @@ func (self *Session) packState(state byte, extra []byte) []byte {
   return buf.Bytes()
 }
 
-func (self *Session) sendInfo(curSerial uint32, maxSerial uint32) {
-  buf := new(bytes.Buffer)
-  buf.Write([]byte{SESSION_PACKET_TYPE_INFO}) // packet type
-
-  binary.Write(buf, binary.BigEndian, uint32(time.Now().Unix())) // timestamp
-  binary.Write(buf, binary.BigEndian, curSerial) // current waiting serial
-  binary.Write(buf, binary.BigEndian, maxSerial) // max received serial
-
-  self.infoChan <- ToSend{self, buf.Bytes()}
-}
-
 func (self *Session) Send(data []byte) int {
   if self.remoteReadState == ABORT {
     return ABORT
   }
-  self.sendQueue <- ToSend{self, self.packData(data)}
+  self.sendQueue <- ToSend{DATA, self, self.packData(data)}
   return NORMAL
 }
 
@@ -286,38 +276,31 @@ func (self *Session) FinishSend() { // no more data will be send
   self.sendState = FINISH
   serialBuf := new(bytes.Buffer)
   binary.Write(serialBuf, binary.BigEndian, &self.serial)
-  self.sendQueue <- ToSend{self, self.packState(STATE_FINISH_SEND, serialBuf.Bytes())}
+  self.sendQueue <- ToSend{STATE, self, self.packState(STATE_FINISH_SEND, serialBuf.Bytes())}
 }
 
 func (self *Session) AbortSend() { // abort all pending data immediately
   self.sendState = ABORT
-  self.sendQueue <- ToSend{self, self.packState(STATE_ABORT_SEND, []byte{})}
+  self.sendQueue <- ToSend{STATE, self, self.packState(STATE_ABORT_SEND, []byte{})}
 }
 
 func (self *Session) FinishRead() { // no more data will be read
   self.readState = FINISH
   serialBuf := new(bytes.Buffer)
   binary.Write(serialBuf, binary.BigEndian, &self.serial)
-  self.sendQueue <- ToSend{self, self.packState(STATE_FINISH_READ, serialBuf.Bytes())}
+  self.sendQueue <- ToSend{STATE, self, self.packState(STATE_FINISH_READ, serialBuf.Bytes())}
 }
 
 func (self *Session) AbortRead() { // stop reading immediately
   self.readState = ABORT
-  self.sendQueue <- ToSend{self, self.packState(STATE_ABORT_READ, []byte{})}
+  self.sendQueue <- ToSend{STATE, self, self.packState(STATE_ABORT_READ, []byte{})}
 }
 
-func (self *Session) stop() {
+func (self *Session) Stop() {
   self.closed = true
-  close(self.incomingChan)
-  p("start>\n")
-  <-self.receiveStopped
-  self.heartBeat.Stop()
-  <-self.heartBeatStopped
-  close(self.dataBuffer)
-  self.stopProvideData <- true
-  <-self.providerStopped
+  close(self.stop)
 }
 
 func (self *Session) log(f string, vars ...interface{}) {
-  p(ps("SESSION %d %s", self.id, f), vars...)
+  colorp("32", ps("SESSION %d %s", self.id, f), vars...)
 }

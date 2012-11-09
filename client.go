@@ -5,6 +5,7 @@ import (
   "sync"
   "math/rand"
   "time"
+  "encoding/binary"
 )
 
 func init() {
@@ -12,6 +13,8 @@ func init() {
 }
 
 type Client struct {
+  id uint64
+  end chan struct{}
   connPool *ConnPool
   conns int
 
@@ -19,8 +22,6 @@ type Client struct {
   raddr *net.TCPAddr
 
   deadConnNotify chan bool
-
-  heartBeat *Ticker
 }
 
 func NewClient(addr string, key string, conns int) (*Client, error) {
@@ -30,60 +31,57 @@ func NewClient(addr string, key string, conns int) (*Client, error) {
   }
 
   self := &Client{
+    id: uint64(rand.Int63()),
+    end: make(chan struct{}),
     connPool: newConnPool(key, nil),
     conns: conns,
     raddr: raddr,
 
     deadConnNotify: make(chan bool, CHAN_BUF_SIZE),
-
-    heartBeat: NewTicker(time.Second * 5),
   }
-
-  go self.startDeadConnWatcher()
-  go self.startHeartBeat()
+  self.connPool.deadConnNotify = self.deadConnNotify
 
   err = self.connect(conns)
   if err != nil {
     return nil, err
   }
 
+  go self.start()
+
   return self, nil
 }
 
-func (self *Client) Close() {
-  self.connPool.Close()
-  self.heartBeat.Stop()
-  close(self.deadConnNotify)
-}
+func (self *Client) start() {
+  heartBeat := time.Tick(time.Second * 2)
+  tick := 0
 
-func (self *Client) startDeadConnWatcher() {
-  self.connPool.deadConnNotify = self.deadConnNotify
+  LOOP:
   for {
-    _, ok := <-self.deadConnNotify
-    if !ok {
-      return
+    select {
+    case <-self.deadConnNotify:
+      if self.livingConns > 0 {
+        self.livingConns--
+      }
+    case <-heartBeat:
+      self.log("tick %d %d conns", tick, self.livingConns)
+      self.checkConns()
+    case <-self.end:
+      break LOOP
     }
-    if self.livingConns > 0 {
-      self.livingConns--
-    }
+    tick++
   }
+
+  // finalizer
+  self.connPool.Stop()
 }
 
-func (self *Client) startHeartBeat() {
-  for {
-    _, ok := <-self.heartBeat.C
-    if !ok {
-      return
-    }
+func (self *Client) Stop() {
+  close(self.end)
+}
 
-    self.log("living connections %d\n", self.livingConns)
-    if self.livingConns == 0 && !self.connPool.closed {
-      self.log("lost all connection to server\n")
-      time.Sleep(time.Second * 30)
-      self.connect(self.conns)
-    } else if self.livingConns < self.conns && !self.connPool.closed {
-      self.connect(self.conns - self.livingConns)
-    }
+func (self *Client) checkConns() {
+  if self.livingConns < self.conns && !self.connPool.closed {
+    self.connect(self.conns - self.livingConns)
   }
 }
 
@@ -98,6 +96,7 @@ func (self *Client) connect(conns int) (err error) {
       if err != nil {
         return
       }
+      binary.Write(conn, binary.BigEndian, self.id)
       self.connPool.newConnChan <- conn
       self.livingConns++
     }()
@@ -111,5 +110,5 @@ func (self *Client) NewSession() *Session {
 }
 
 func (self *Client) log(s string, vars ...interface{}) {
-  p("CLIENT " + s, vars...)
+  colorp("31", ps("CLIENT %d", self.id) + s, vars...)
 }
