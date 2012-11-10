@@ -97,7 +97,7 @@ func (self *Session) start() {
       self.showInfo()
       self.sendInfo()
       self.checkState()
-      self.log("tick %d", tick)
+      //self.log("tick %d", tick)
     case <-self.stop:
       break LOOP
     }

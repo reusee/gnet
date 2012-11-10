@@ -71,7 +71,7 @@ func (self *Conn) start() {
       if err != nil {
         break LOOP
       }
-      self.log("tick %d", tick)
+      //self.log("tick %d", tick)
     case <-self.stop:
       return
     }

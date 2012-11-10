@@ -83,7 +83,7 @@ func (self *ConnPool) start() {
       self.rawSendQueue.In <- frame.Bytes()
       infoBuf = new(bytes.Buffer)
 
-      self.log("tick %d conns %d", tick, len(self.conns))
+      self.log("tick %d conns %d sessions %d", tick, len(self.conns), len(self.sessions))
 
       if self.maxConnNum > 0 && len(self.conns) == 0 { // client disconnected
         self.log("client disconnected")
