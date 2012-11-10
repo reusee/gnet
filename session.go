@@ -24,8 +24,8 @@ type Session struct {
   readState int // for session cleaner
   sendState int // for session cleaner
   remoteReadState int // for Send() and conn writer
-  remoteReadFinishAt uint32
   remoteSendState int // 
+  remoteReadFinishAt uint32
   remoteSendFinishAt uint32
 
   incomingDataCount uint32
@@ -96,6 +96,7 @@ func (self *Session) start() {
     case <-heartBeat:
       self.showInfo()
       self.sendInfo()
+      self.checkState()
       self.log("tick %d", tick)
     case <-self.stop:
       break LOOP
@@ -147,6 +148,15 @@ func (self *Session) sendInfo() {
   binary.Write(buf, binary.BigEndian, max) // max received serial
 
   self.infoChan.In <- ToSend{INFO, self, buf.Bytes()}
+}
+
+func (self *Session) checkState() {
+  if self.sendState == FINISH || self.sendState == ABORT {
+    if self.readState == FINISH || self.readState == ABORT {
+      self.log("finish/abort read/send, stop")
+      self.Stop()
+    }
+  }
 }
 
 func (self *Session) handleIncoming(packet []byte) {
@@ -211,9 +221,11 @@ func (self *Session) pushData(packet Packet) {
   }
   self.message <- message
   if self.remoteReadState == FINISH && packet.serial >= self.remoteReadFinishAt {
+    self.sendState = FINISH
     self.pushState(STATE_FINISH_READ)
   }
   if self.remoteSendState == FINISH && packet.serial >= self.remoteSendFinishAt {
+    self.readState = FINISH
     self.pushState(STATE_ABORT_SEND)
   }
 }
@@ -235,6 +247,7 @@ func (self *Session) handleStatePacket(frame []byte) {
     binary.Read(bytes.NewReader(frame[1:]), binary.BigEndian, &serial)
     self.remoteSendFinishAt = serial
     if self.remoteSendState == FINISH && self.incomingSerial >= self.remoteSendFinishAt {
+      self.readState = FINISH
       self.pushState(STATE_FINISH_SEND)
     }
   case STATE_FINISH_READ:
@@ -243,13 +256,16 @@ func (self *Session) handleStatePacket(frame []byte) {
     binary.Read(bytes.NewReader(frame[1:]), binary.BigEndian, &serial)
     self.remoteReadFinishAt = serial
     if self.remoteReadState == FINISH && self.incomingSerial >= self.remoteReadFinishAt {
+      self.sendState = FINISH
       self.pushState(STATE_FINISH_READ)
     }
   case STATE_ABORT_SEND: // drop all received packet
     self.remoteSendState = ABORT
+    self.readState = ABORT
     self.pushState(STATE_ABORT_SEND)
   case STATE_ABORT_READ: // drop all outgoing packet
     self.remoteReadState = ABORT
+    self.sendState = ABORT
     self.pushState(STATE_ABORT_READ)
   }
 }
@@ -315,11 +331,6 @@ func (self *Session) FinishSend() { // no more data will be send
   self.sendQueue.In <- ToSend{STATE, self, self.packState(STATE_FINISH_SEND, serialBuf.Bytes())}
 }
 
-func (self *Session) AbortSend() { // abort all pending data immediately
-  self.sendState = ABORT
-  self.sendQueue.In <- ToSend{STATE, self, self.packState(STATE_ABORT_SEND, []byte{})}
-}
-
 func (self *Session) FinishRead() { // no more data will be read
   self.readState = FINISH
   serialBuf := new(bytes.Buffer)
@@ -327,9 +338,24 @@ func (self *Session) FinishRead() { // no more data will be read
   self.sendQueue.In <- ToSend{STATE, self, self.packState(STATE_FINISH_READ, serialBuf.Bytes())}
 }
 
+func (self *Session) Finish() {
+  self.FinishRead()
+  self.FinishSend()
+}
+
+func (self *Session) AbortSend() { // abort all pending data immediately
+  self.sendState = ABORT
+  self.sendQueue.In <- ToSend{STATE, self, self.packState(STATE_ABORT_SEND, []byte{})}
+}
+
 func (self *Session) AbortRead() { // stop reading immediately
   self.readState = ABORT
   self.sendQueue.In <- ToSend{STATE, self, self.packState(STATE_ABORT_READ, []byte{})}
+}
+
+func (self *Session) Abort() {
+  self.AbortSend()
+  self.AbortRead()
 }
 
 func (self *Session) Stop() {

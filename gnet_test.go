@@ -126,13 +126,10 @@ func TestSessionFinish(t *testing.T) {
         data := msg.Data
         session.Send(data)
         c++
-        if c > 100 {
-          clientSession.AbortSend()
-        }
       case STATE:
-        if msg.State == STATE_ABORT_SEND {
-          fmt.Printf("\nclient abort send. quit\n")
-          session.AbortRead()
+        if msg.State == STATE_FINISH_SEND {
+          fmt.Printf("\nclient finish send. quit\n")
+          session.FinishSend()
           return
         }
       }
@@ -143,6 +140,7 @@ func TestSessionFinish(t *testing.T) {
     clientSession.Send([]byte(fmt.Sprintf("%d", i)))
   }
   var data []byte
+  clientSession.FinishSend()
   for {
     msg := <-clientSession.Message
     switch msg.Tag {
@@ -150,8 +148,8 @@ func TestSessionFinish(t *testing.T) {
       data = msg.Data
       p("%s ", data)
     case STATE:
-      if msg.State == STATE_ABORT_READ {
-        fmt.Printf("\nserver abort read. quit. last echo %s\n", data)
+      if msg.State == STATE_FINISH_SEND {
+        fmt.Printf("\nserver finish send. quit. last echo %s\n", data)
         return
       }
     }

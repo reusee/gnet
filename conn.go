@@ -36,7 +36,6 @@ func (self *Conn) startReadChan() {
   for {
     data, err := readFrame(self.conn)
     if err != nil {
-      self.log("tcp conn read error %v\n", err)
       return
     }
     self.in <- data
@@ -54,26 +53,22 @@ func (self *Conn) start() {
     select {
     case packet, ok := <-self.in: // read from conn
       if !ok {
-        self.log("read error")
         break LOOP
       }
       self.handlePacket(packet)
     case toSend := <-self.pool.sendQueue.Out:
       err = self.handleSend(toSend)
       if err != nil {
-        self.log("send error")
         break LOOP
       }
     case data := <-self.pool.rawSendQueue.Out:
       err = self.handleRawSend(data)
       if err != nil {
-        self.log("raw send error")
         break LOOP
       }
     case <-heartBeat:
       err = self.ping()
       if err != nil {
-        self.log("ping error")
         break LOOP
       }
       self.log("tick %d", tick)
