@@ -99,6 +99,7 @@ func (self *Session) start() {
       self.showInfo()
       self.sendInfo()
       self.checkState()
+      self.checkRemoteConnectivity()
       //self.log("tick %d", tick)
     case <-self.stop:
       break LOOP
@@ -162,6 +163,13 @@ func (self *Session) checkState() {
       self.log("finish/abort read/send, stop")
       self.Stop()
     }
+  }
+}
+
+func (self *Session) checkRemoteConnectivity() {
+  if uint32(time.Now().Unix()) - self.lastRemoteHeartbeatTime > 10 {
+    self.log("remote session lost, stop")
+    self.Stop()
   }
 }
 
