@@ -4,6 +4,8 @@ import (
   "fmt"
 )
 
+var DEBUG = false // if you want to debug, set this to true in a file contains an init function
+
 const (
   INITIAL_BUF_CAPACITY = 2 ^ 16
 

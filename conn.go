@@ -158,5 +158,7 @@ func (self *Conn) Stop() {
 }
 
 func (self *Conn) log(f string, vars ...interface{}) {
-  colorp("33", ps("CONN %d ", self.id) + f, vars...)
+  if DEBUG {
+    colorp("33", ps("CONN %d ", self.id) + f, vars...)
+  }
 }

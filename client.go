@@ -120,5 +120,7 @@ func (self *Client) NewSession() *Session {
 }
 
 func (self *Client) log(s string, vars ...interface{}) {
-  colorp("31", ps("CLIENT %d ", self.id) + s, vars...)
+  if DEBUG {
+    colorp("31", ps("CLIENT %d ", self.id) + s, vars...)
+  }
 }

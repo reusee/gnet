@@ -383,5 +383,7 @@ func (self *Session) Stop() {
 }
 
 func (self *Session) log(f string, vars ...interface{}) {
-  colorp("32", ps("SESSION %d %s", self.id, f), vars...)
+  if DEBUG {
+    colorp("32", ps("SESSION %d %s", self.id, f), vars...)
+  }
 }

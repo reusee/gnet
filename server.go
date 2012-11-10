@@ -108,5 +108,7 @@ func (self *Server) Stop() {
 }
 
 func (self *Server) log(f string, vars ...interface{}) {
-  colorp("35", "SERVER: " + f, vars...)
+  if DEBUG {
+    colorp("35", "SERVER: " + f, vars...)
+  }
 }

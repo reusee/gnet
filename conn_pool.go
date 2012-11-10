@@ -146,5 +146,7 @@ func (self *ConnPool) Stop() {
 }
 
 func (self *ConnPool) log(f string, vars ...interface{}) {
-  colorp("34", "CONNPOOL " + f, vars...)
+  if DEBUG {
+    colorp("34", "CONNPOOL " + f, vars...)
+  }
 }
