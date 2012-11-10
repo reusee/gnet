@@ -17,7 +17,7 @@ type Client struct {
   end chan struct{}
   connPool *ConnPool
   conns int
-  closed bool
+  Closed bool
 
   livingConns int
   raddr *net.TCPAddr
@@ -79,7 +79,7 @@ func (self *Client) start() {
   }
 
   // finalizer
-  self.closed = true
+  self.Closed = true
   self.connPool.Stop()
   self.deadConnNotify.Stop()
   self.connPoolStopNotify.Stop()
