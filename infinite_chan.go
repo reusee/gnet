@@ -196,7 +196,18 @@ type InfiniteSessionChan struct {
   stop chan struct{}
 }
 
-func NewInfiniteSessionChan(out chan *Session) *InfiniteSessionChan {
+func NewInfiniteSessionChan() *InfiniteSessionChan {
+  self := &InfiniteSessionChan{
+    In: make(chan *Session),
+    Out: make(chan *Session),
+    buffer: make([]*Session, 0, INITIAL_BUF_CAPACITY),
+    stop: make(chan struct{}),
+  }
+  go self.start()
+  return self
+}
+
+func NewInfiniteSessionChanWithOutChan(out chan *Session) *InfiniteSessionChan {
   self := &InfiniteSessionChan{
     In: make(chan *Session),
     Out: out,

@@ -36,7 +36,7 @@ func NewServer(addr string, key string) (*Server, error) {
     stop: make(chan struct{}),
     connPoolStopNotify: NewInfiniteConnPoolChan(),
   }
-  self.newSessionBuffer = NewInfiniteSessionChan(self.New)
+  self.newSessionBuffer = NewInfiniteSessionChanWithOutChan(self.New)
 
   go self.startAcceptChan()
   go self.start(key)

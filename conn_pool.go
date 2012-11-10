@@ -24,6 +24,7 @@ type ConnPool struct {
 
   sessions map[uint64]*Session
   newSessionChan *chan *Session
+  sessionStopNotify *InfiniteSessionChan
 
   conns map[uint64]*Conn
   maxConnNum int
@@ -43,6 +44,7 @@ func newConnPool(key string, newSessionChan *chan *Session) *ConnPool {
 
     sessions: make(map[uint64]*Session),
     newSessionChan: newSessionChan,
+    sessionStopNotify: NewInfiniteSessionChan(),
 
     conns: make(map[uint64]*Conn),
   }
@@ -94,6 +96,9 @@ func (self *ConnPool) start() {
       self.log("delete conn %d", conn.id)
       delete(self.conns, conn.id)
 
+    case session := <-self.sessionStopNotify.Out:
+      delete(self.sessions, session.id)
+
     case <-self.stop:
       break LOOP
     }
@@ -106,6 +111,7 @@ func (self *ConnPool) start() {
   // stop conns
   for _, conn := range self.conns {
     conn.Stop()
+    delete(self.conns, conn.id)
   }
   // stop sessions
   for serial, session := range self.sessions {
@@ -119,6 +125,7 @@ func (self *ConnPool) start() {
   // stop chans
   self.rawSendQueue.Stop()
   self.newConnChan.Stop()
+  self.sessionStopNotify.Stop()
   self.deadConnChan.Stop()
   self.sendQueue.Stop()
   self.infoChan.Stop()
@@ -127,6 +134,7 @@ func (self *ConnPool) start() {
 func (self *ConnPool) newSession(sessionId uint64) *Session {
   session := newSession(sessionId, self)
   self.sessions[sessionId] = session
+  session.stopNotify = self.sessionStopNotify
   if self.newSessionChan != nil {
     *(self.newSessionChan) <- session
   }

@@ -118,14 +118,12 @@ func TestSessionFinish(t *testing.T) {
 
   go func() {
     session := <-server.New
-    c := 0
     for {
       msg := <-session.Message
       switch msg.Tag {
       case DATA:
         data := msg.Data
         session.Send(data)
-        c++
       case STATE:
         if msg.State == STATE_FINISH_SEND {
           fmt.Printf("\nclient finish send. quit\n")

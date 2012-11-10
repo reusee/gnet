@@ -42,6 +42,8 @@ type Session struct {
   lastRemoteMaxSerial uint32
 
   C *InfiniteByteSliceChan
+
+  stopNotify *InfiniteSessionChan
 }
 
 type ToSend struct {
@@ -108,6 +110,9 @@ func (self *Session) start() {
   self.pushState(STATE_STOP)
   self.incomingChan.Stop()
   self.C.Stop()
+  if self.stopNotify != nil {
+    self.stopNotify.In <- self
+  }
 }
 
 func (self *Session) startMessageDeliver() {
