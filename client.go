@@ -17,6 +17,7 @@ type Client struct {
   end chan struct{}
   connPool *ConnPool
   conns int
+  closed bool
 
   livingConns int
   raddr *net.TCPAddr
@@ -78,6 +79,7 @@ func (self *Client) start() {
   }
 
   // finalizer
+  self.closed = true
   self.connPool.Stop()
   self.deadConnNotify.Stop()
   self.connPoolStopNotify.Stop()
@@ -118,5 +120,5 @@ func (self *Client) NewSession() *Session {
 }
 
 func (self *Client) log(s string, vars ...interface{}) {
-  colorp("31", ps("CLIENT %d", self.id) + s, vars...)
+  colorp("31", ps("CLIENT %d ", self.id) + s, vars...)
 }
