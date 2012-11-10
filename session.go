@@ -169,9 +169,11 @@ func (self *Session) checkState() {
 }
 
 func (self *Session) checkRemoteConnectivity() {
-  if uint32(time.Now().Unix()) - self.lastRemoteHeartbeatTime > 10 {
-    self.log("remote session lost, stop")
-    self.Stop()
+  if self.lastRemoteHeartbeatTime > 0 {
+    if uint32(time.Now().Unix()) - self.lastRemoteHeartbeatTime > 10 {
+      self.log("remote session lost, stop")
+      self.Stop()
+    }
   }
 }
 
