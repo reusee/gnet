@@ -6,6 +6,7 @@ import (
   "sync/atomic"
   "container/heap"
   "time"
+  "sync"
 )
 
 type Session struct {
@@ -13,6 +14,7 @@ type Session struct {
   id uint64
   serial uint32
   closed bool
+  stopOnce sync.Once
 
   incomingSerial uint32
   maxIncomingSerial uint32
@@ -374,8 +376,10 @@ func (self *Session) Abort() {
 }
 
 func (self *Session) Stop() {
-  self.closed = true
-  close(self.stop)
+  self.stopOnce.Do(func() {
+    self.closed = true
+    close(self.stop)
+  })
 }
 
 func (self *Session) log(f string, vars ...interface{}) {
