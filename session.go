@@ -19,7 +19,7 @@ type Session struct {
   incomingChan *InfiniteByteSliceChan
   sendQueue *InfiniteToSendChan
   infoChan *InfiniteToSendChan
-  packets map[uint32][]byte
+  //packets map[uint32][]byte
 
   readState int // for session cleaner
   sendState int // for session cleaner
@@ -61,7 +61,7 @@ func newSession(id uint64, connPool *ConnPool) *Session {
     incomingChan: NewInfiniteByteSliceChan(),
     sendQueue: connPool.sendQueue,
     infoChan: connPool.infoChan,
-    packets: make(map[uint32][]byte),
+    //packets: make(map[uint32][]byte),
 
     readState: NORMAL,
     sendState: NORMAL,
@@ -286,15 +286,16 @@ func (self *Session) handleInfoPacket(data []byte) {
   binary.Read(reader, binary.BigEndian, &curSerial)
   binary.Read(reader, binary.BigEndian, &maxSerial)
 
-  for serial, _ := range self.packets { // clear cached packet
-    if serial < curSerial {
-      delete(self.packets, serial)
-    }
-  }
+  //for serial, _ := range self.packets { // clear cached packet
+  //  if serial < curSerial {
+  //    self.log("clear cached %d", serial)
+  //    delete(self.packets, serial)
+  //  }
+  //}
 
-  if curSerial <= self.serial && curSerial == self.lastRemoteCurSerial { // need to resend
-    self.sendQueue.In <- ToSend{INFO, self, self.packets[curSerial]}
-  }
+  //if curSerial <= self.serial && curSerial == self.lastRemoteCurSerial { // need to resend
+  //  self.sendQueue.In <- ToSend{INFO, self, self.packets[curSerial]}
+  //}
 
   self.lastRemoteHeartbeatTime = timestamp
   self.lastRemoteCurSerial = curSerial
@@ -309,7 +310,7 @@ func (self *Session) packData(data []byte) []byte {
   binary.Write(buf, binary.BigEndian, serial) // packet serial
   buf.Write(data) // data
   ret := buf.Bytes()
-  self.packets[serial] = ret
+  //self.packets[serial] = ret
   return ret
 }
 
