@@ -286,9 +286,9 @@ func (self *Session) handleInfoPacket(data []byte) {
   binary.Read(reader, binary.BigEndian, &curSerial)
   binary.Read(reader, binary.BigEndian, &maxSerial)
 
-  for k, _ := range self.packets { // clear cached packet
-    if k < curSerial {
-      delete(self.packets, k)
+  for serial, _ := range self.packets { // clear cached packet
+    if serial < curSerial {
+      delete(self.packets, serial)
     }
   }
 

@@ -80,7 +80,6 @@ func (self *ConnPool) start() {
       info := infoBuf.Bytes()
       frame := new(bytes.Buffer)
       frame.Write([]byte{PACKET_TYPE_INFO})
-      binary.Write(frame, binary.BigEndian, uint32(len(info)))
       frame.Write(info)
       self.rawSendQueue.In <- frame.Bytes()
       infoBuf = new(bytes.Buffer)
@@ -135,6 +134,7 @@ func (self *ConnPool) newSession(sessionId uint64) *Session {
   session := newSession(sessionId, self)
   self.sessions[sessionId] = session
   session.stopNotify = self.sessionStopNotify
+  session.infoChan = self.infoChan
   if self.newSessionChan != nil {
     *(self.newSessionChan) <- session
   }
