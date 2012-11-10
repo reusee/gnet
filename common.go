@@ -19,6 +19,7 @@ const (
   STATE_ABORT_SEND = byte(1)
   STATE_FINISH_READ = byte(2)
   STATE_ABORT_READ = byte(3)
+  STATE_STOP = byte(4)
 
   NORMAL = iota
   FINISH

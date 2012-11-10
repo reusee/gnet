@@ -105,6 +105,7 @@ func (self *Session) start() {
   }
 
   self.log("stop")
+  self.pushState(STATE_STOP)
   self.incomingChan.Stop()
   self.C.Stop()
 }
