@@ -40,6 +40,8 @@ type Session struct {
   lastRemoteHeartbeatTime uint32
   lastRemoteCurSerial uint32
   lastRemoteMaxSerial uint32
+
+  C *InfiniteByteSliceChan
 }
 
 type ToSend struct {
@@ -70,6 +72,8 @@ func newSession(id uint64, connPool *ConnPool) *Session {
     message: make(chan Message),
     messageBuffer: make([]Message, 0, INITIAL_BUF_CAPACITY),
     stopDeliver: make(chan struct{}),
+
+    C: NewInfiniteByteSliceChan(),
   }
 
   go self.startMessageDeliver()
@@ -87,6 +91,8 @@ func (self *Session) start() {
     select {
     case packet := <-self.incomingChan.Out:
       self.handleIncoming(packet)
+    case data := <-self.C.Out:
+      self.Send(data)
     case <-heartBeat:
       self.showInfo()
       self.sendInfo()
@@ -99,6 +105,7 @@ func (self *Session) start() {
 
   self.log("stop")
   self.incomingChan.Stop()
+  self.C.Stop()
 }
 
 func (self *Session) startMessageDeliver() {

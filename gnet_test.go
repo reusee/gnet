@@ -25,7 +25,7 @@ func TestNew(t *testing.T) {
   go func() {
     session := client.NewSession()
     for i := 0; i < n; i++ {
-      session.Send([]byte(fmt.Sprintf("%d", i)))
+      session.C.In <- []byte(fmt.Sprintf("%d", i))
       <-session.Message
     }
   }()
