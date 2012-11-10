@@ -40,6 +40,7 @@ type Session struct {
   stopDeliver chan struct{}
 
   lastRemoteHeartbeatTime uint32
+  lastRemoteHeartbeatTimeLocal uint32
   lastRemoteCurSerial uint32
   lastRemoteMaxSerial uint32
 
@@ -169,8 +170,8 @@ func (self *Session) checkState() {
 }
 
 func (self *Session) checkRemoteConnectivity() {
-  if self.lastRemoteHeartbeatTime > 0 {
-    if uint32(time.Now().Unix()) - self.lastRemoteHeartbeatTime > 10 {
+  if self.lastRemoteHeartbeatTimeLocal > 0 {
+    if uint32(time.Now().Unix()) - self.lastRemoteHeartbeatTimeLocal > 10 {
       self.log("remote session lost, stop")
       self.Stop()
     }
@@ -310,6 +311,7 @@ func (self *Session) handleInfoPacket(data []byte) {
   //}
 
   self.lastRemoteHeartbeatTime = timestamp
+  self.lastRemoteHeartbeatTimeLocal = uint32(time.Now().Unix())
   self.lastRemoteCurSerial = curSerial
   self.lastRemoteMaxSerial = maxSerial
 }

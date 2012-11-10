@@ -7,7 +7,7 @@ import (
 var DEBUG = false // if you want to debug, set this to true in a file contains an init function
 
 const (
-  INITIAL_BUF_CAPACITY = 2 ^ 16
+  INITIAL_BUF_CAPACITY = 2 ^ 12
 
   PACKET_TYPE_SESSION = byte(0)
   PACKET_TYPE_PING = byte(1)
