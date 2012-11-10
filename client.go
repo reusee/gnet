@@ -22,6 +22,7 @@ type Client struct {
   raddr *net.TCPAddr
 
   deadConnNotify *InfiniteBoolChan
+  connPoolStopNotify *InfiniteConnPoolChan
 }
 
 func NewClient(addr string, key string, conns int) (*Client, error) {
@@ -38,8 +39,10 @@ func NewClient(addr string, key string, conns int) (*Client, error) {
     raddr: raddr,
 
     deadConnNotify: NewInfiniteBoolChan(),
+    connPoolStopNotify: NewInfiniteConnPoolChan(),
   }
   self.connPool.deadConnNotify = self.deadConnNotify
+  self.connPool.stopNotify = self.connPoolStopNotify.In
 
   err = self.connect(conns)
   if err != nil {
@@ -65,6 +68,9 @@ func (self *Client) start() {
     case <-heartBeat:
       self.log("tick %d %d conns", tick, self.livingConns)
       self.checkConns()
+    case <-self.connPoolStopNotify.Out:
+      self.log("lost connection to server")
+      break LOOP
     case <-self.end:
       break LOOP
     }
@@ -74,6 +80,7 @@ func (self *Client) start() {
   // finalizer
   self.connPool.Stop()
   self.deadConnNotify.Stop()
+  self.connPoolStopNotify.Stop()
 }
 
 func (self *Client) Stop() {
