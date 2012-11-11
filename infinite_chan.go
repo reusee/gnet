@@ -50,6 +50,7 @@ func (self *InfiniteChan) start() {
 }
 
 func (self *InfiniteChan) Stop() {
+  self.buffer = nil
   close(self.stop)
 }
 
@@ -95,6 +96,7 @@ func (self *InfiniteBoolChan) start() {
 }
 
 func (self *InfiniteBoolChan) Stop() {
+  self.buffer = nil
   close(self.stop)
 }
 
@@ -140,6 +142,7 @@ func (self *InfiniteByteSliceChan) start() {
 }
 
 func (self *InfiniteByteSliceChan) Stop() {
+  self.buffer = nil
   close(self.stop)
 }
 
@@ -185,6 +188,7 @@ func (self *InfiniteTCPConnChan) start() {
 }
 
 func (self *InfiniteTCPConnChan) Stop() {
+  self.buffer = nil
   close(self.stop)
 }
 
@@ -241,6 +245,7 @@ func (self *InfiniteSessionChan) start() {
 }
 
 func (self *InfiniteSessionChan) Stop() {
+  self.buffer = nil
   close(self.stop)
 }
 
@@ -286,6 +291,7 @@ func (self *InfiniteConnPoolChan) start() {
 }
 
 func (self *InfiniteConnPoolChan) Stop() {
+  self.buffer = nil
   close(self.stop)
 }
 
@@ -331,6 +337,7 @@ func (self *InfiniteConnChan) start() {
 }
 
 func (self *InfiniteConnChan) Stop() {
+  self.buffer = nil
   close(self.stop)
 }
 
@@ -376,6 +383,7 @@ func (self *InfiniteToSendChan) start() {
 }
 
 func (self *InfiniteToSendChan) Stop() {
+  self.buffer = nil
   close(self.stop)
 }
 

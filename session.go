@@ -32,7 +32,7 @@ type Session struct {
 
   incomingDataCount uint32
 
-  packetQueue PacketQueue
+  packetQueue *PacketQueue
 
   Message chan Message
   messageBuffer []Message
@@ -110,6 +110,7 @@ func (self *Session) start() {
     tick++
   }
 
+  // finalize
   self.log("stop")
   self.pushState(STATE_STOP)
   self.incomingChan.Stop()
@@ -117,6 +118,9 @@ func (self *Session) start() {
   if self.stopNotify != nil {
     self.stopNotify.In <- self
   }
+  self.packetQueue = nil
+  self.message = nil
+  self.messageBuffer = nil
 }
 
 func (self *Session) startMessageDeliver() {
@@ -215,18 +219,18 @@ func (self *Session) handleDataPacket(data []byte) {
     self.pushData(packet)
     self.incomingSerial++
   } else if serial > self.incomingSerial {
-    heap.Push(&self.packetQueue, &packet)
+    heap.Push(self.packetQueue, &packet)
   }
   if serial > self.maxIncomingSerial {
     self.maxIncomingSerial = serial
   }
-  for len(self.packetQueue) > 0 {
-    next := heap.Pop(&self.packetQueue).(*Packet)
+  for len(*(self.packetQueue)) > 0 {
+    next := heap.Pop(self.packetQueue).(*Packet)
     if next.serial == self.incomingSerial {
       self.pushData(*next)
       self.incomingSerial++
     } else {
-      heap.Push(&self.packetQueue, next)
+      heap.Push(self.packetQueue, next)
       break
     }
   }

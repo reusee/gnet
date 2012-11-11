@@ -6,10 +6,10 @@ import (
 
 type PacketQueue []*Packet
 
-func newPacketQueue() PacketQueue {
+func newPacketQueue() *PacketQueue {
   packetQueue := make(PacketQueue, 0, INITIAL_BUF_CAPACITY)
   heap.Init(&packetQueue)
-  return packetQueue
+  return &packetQueue
 }
 
 func (self PacketQueue) Len() int {
