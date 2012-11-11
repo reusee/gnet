@@ -37,8 +37,8 @@ func parseSessionPacket(packet []byte, byteKeys []byte, uint64Keys []uint64) ([]
   var sessionId uint64
   binary.Read(bytes.NewReader(packet[:8]), binary.BigEndian, &sessionId)
   dataLen := len(packet) - 8
-  data := make([]byte, dataLen)
-  xorSlice(packet[8:], data, dataLen, dataLen % 8, byteKeys, uint64Keys)
+  data := packet[8:]
+  xorSlice(data, dataLen, byteKeys, uint64Keys)
   return data, sessionId
 }
 
@@ -47,8 +47,7 @@ func assembleSessionPacket(sessionId uint64, data []byte, byteKeys []byte, uint6
   buf.Write([]byte{PACKET_TYPE_SESSION}) // packet type
   binary.Write(buf, binary.BigEndian, sessionId) // session id
   dataLen := len(data)
-  encrypted := make([]byte, dataLen)
-  xorSlice(data, encrypted, dataLen, dataLen % 8, byteKeys, uint64Keys)
-  buf.Write(encrypted) // data
+  xorSlice(data, dataLen, byteKeys, uint64Keys)
+  buf.Write(data) // data
   return buf.Bytes()
 }

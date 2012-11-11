@@ -28,25 +28,24 @@ func calculateKeys(keyStr string) (byteKeys []byte, uint64Keys []uint64) {
   return
 }
 
-func xorSlice(from []byte, to []byte, n int, keyIndex int, byteKeys []byte, uint64Keys []uint64) int {
+func xorSlice(s []byte, n int, byteKeys []byte, uint64Keys []uint64) {
+  keyIndex := n % 8
   j := 0
   if n >= 8 {
-    toU64Slice := getUint64Slice(to)
-    fromU64Slice := getUint64Slice(from)
+    u64Slice := getUint64Slice(s)
     for i := 0; i < n / 8; i++ {
-      toU64Slice[i] = fromU64Slice[i] ^ uint64Keys[keyIndex]
+      u64Slice[i] = u64Slice[i] ^ uint64Keys[keyIndex]
       j += 8
     }
   }
   for j < n {
-    to[j] = from[j] ^ byteKeys[keyIndex]
+    s[j] = s[j] ^ byteKeys[keyIndex]
     keyIndex++
     if keyIndex == 8 {
       keyIndex = 0
     }
     j++
   }
-  return keyIndex
 }
 
 func getUint64Slice(s []byte) []uint64 {
