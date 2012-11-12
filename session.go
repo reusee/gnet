@@ -5,6 +5,7 @@ import (
   "encoding/binary"
   "sync/atomic"
   "container/heap"
+  "container/list"
   "time"
   "sync"
 )
@@ -35,7 +36,7 @@ type Session struct {
   packetQueue *PacketQueue
 
   Message chan Message
-  messageBuffer []Message
+  messageBuffer *list.List
   message chan Message
   stopDeliver chan struct{}
 
@@ -75,7 +76,7 @@ func newSession(id uint64, connPool *ConnPool) *Session {
 
     Message: make(chan Message),
     message: make(chan Message),
-    messageBuffer: make([]Message, 0, INITIAL_BUF_CAPACITY),
+    messageBuffer: list.New(),
     stopDeliver: make(chan struct{}),
 
     C: NewInfiniteByteSliceChan(),
@@ -88,7 +89,7 @@ func newSession(id uint64, connPool *ConnPool) *Session {
 }
 
 func (self *Session) start() {
-  self.log("strat")
+  self.log("start")
   heartBeat := time.Tick(time.Second * 2)
   tick := 0
   LOOP:
@@ -118,26 +119,25 @@ func (self *Session) start() {
   if self.stopNotify != nil {
     self.stopNotify.In <- self
   }
-  self.packetQueue = nil
-  self.message = nil
-  self.messageBuffer = nil
 }
 
 func (self *Session) startMessageDeliver() {
   for {
-    if len(self.messageBuffer) > 0 {
+    if self.messageBuffer.Len() > 0 {
+      elem := self.messageBuffer.Back()
+      value := elem.Value.(Message)
       select {
-      case self.Message <- self.messageBuffer[0]:
-        self.messageBuffer = self.messageBuffer[1:]
+      case self.Message <- value:
+        self.messageBuffer.Remove(elem)
       case value := <-self.message:
-        self.messageBuffer = append(self.messageBuffer, value)
+        self.messageBuffer.PushFront(value)
       case <-self.stopDeliver:
         return
       }
     } else {
       select {
       case value := <-self.message:
-        self.messageBuffer = append(self.messageBuffer, value)
+        self.messageBuffer.PushFront(value)
       case <-self.stopDeliver:
         return
       }

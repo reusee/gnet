@@ -93,8 +93,9 @@ func (self *Server) start(key string) {
   }
 
   // finalizer
-  for _, connPool := range self.connPools {
+  for id, connPool := range self.connPools {
     connPool.Stop()
+    delete(self.connPools, id)
   }
   self.newSessionBuffer.Stop()
   self.newConnChan.Stop()

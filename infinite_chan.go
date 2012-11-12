@@ -2,63 +2,14 @@ package gnet
 
 import (
   "net"
+  "container/list"
 )
-
-// generic
-// InfiniteChan
-// interface{}
-// NewInfiniteChan
-
-type InfiniteChan struct {
-  In chan interface{}
-  Out chan interface{}
-  buffer []interface{}
-  stop chan struct{}
-}
-
-func NewInfiniteChan() *InfiniteChan {
-  self := &InfiniteChan{
-    In: make(chan interface{}),
-    Out: make(chan interface{}),
-    buffer: make([]interface{}, 0, INITIAL_BUF_CAPACITY),
-    stop: make(chan struct{}),
-  }
-  go self.start()
-  return self
-}
-
-func (self *InfiniteChan) start() {
-  for {
-    if len(self.buffer) > 0 {
-      select {
-      case self.Out <- self.buffer[0]:
-        self.buffer = self.buffer[1:]
-      case value := <-self.In:
-        self.buffer = append(self.buffer, value)
-      case <-self.stop:
-        return
-      }
-    } else {
-      select {
-      case value := <-self.In:
-        self.buffer = append(self.buffer, value)
-      case <-self.stop:
-        return
-      }
-    }
-  }
-}
-
-func (self *InfiniteChan) Stop() {
-  self.buffer = nil
-  close(self.stop)
-}
 
 // bool
 type InfiniteBoolChan struct {
   In chan bool
   Out chan bool
-  buffer []bool
+  buffer *list.List
   stop chan struct{}
 }
 
@@ -66,7 +17,7 @@ func NewInfiniteBoolChan() *InfiniteBoolChan {
   self := &InfiniteBoolChan{
     In: make(chan bool),
     Out: make(chan bool),
-    buffer: make([]bool, 0, INITIAL_BUF_CAPACITY),
+    buffer: list.New(),
     stop: make(chan struct{}),
   }
   go self.start()
@@ -75,19 +26,21 @@ func NewInfiniteBoolChan() *InfiniteBoolChan {
 
 func (self *InfiniteBoolChan) start() {
   for {
-    if len(self.buffer) > 0 {
+    if self.buffer.Len() > 0 {
+      elem := self.buffer.Back()
+      value := elem.Value.(bool)
       select {
-      case self.Out <- self.buffer[0]:
-        self.buffer = self.buffer[1:]
+      case self.Out <- value:
+        self.buffer.Remove(elem)
       case value := <-self.In:
-        self.buffer = append(self.buffer, value)
+        self.buffer.PushFront(value)
       case <-self.stop:
         return
       }
     } else {
       select {
       case value := <-self.In:
-        self.buffer = append(self.buffer, value)
+        self.buffer.PushFront(value)
       case <-self.stop:
         return
       }
@@ -96,7 +49,6 @@ func (self *InfiniteBoolChan) start() {
 }
 
 func (self *InfiniteBoolChan) Stop() {
-  self.buffer = nil
   close(self.stop)
 }
 
@@ -104,7 +56,7 @@ func (self *InfiniteBoolChan) Stop() {
 type InfiniteByteSliceChan struct {
   In chan []byte
   Out chan []byte
-  buffer [][]byte
+  buffer *list.List
   stop chan struct{}
 }
 
@@ -112,7 +64,7 @@ func NewInfiniteByteSliceChan() *InfiniteByteSliceChan {
   self := &InfiniteByteSliceChan{
     In: make(chan []byte),
     Out: make(chan []byte),
-    buffer: make([][]byte, 0, INITIAL_BUF_CAPACITY),
+    buffer: list.New(),
     stop: make(chan struct{}),
   }
   go self.start()
@@ -121,19 +73,21 @@ func NewInfiniteByteSliceChan() *InfiniteByteSliceChan {
 
 func (self *InfiniteByteSliceChan) start() {
   for {
-    if len(self.buffer) > 0 {
+    if self.buffer.Len() > 0 {
+      elem := self.buffer.Back()
+      value := elem.Value.([]byte)
       select {
-      case self.Out <- self.buffer[0]:
-        self.buffer = self.buffer[1:]
+      case self.Out <- value:
+        self.buffer.Remove(elem)
       case value := <-self.In:
-        self.buffer = append(self.buffer, value)
+        self.buffer.PushFront(value)
       case <-self.stop:
         return
       }
     } else {
       select {
       case value := <-self.In:
-        self.buffer = append(self.buffer, value)
+        self.buffer.PushFront(value)
       case <-self.stop:
         return
       }
@@ -142,7 +96,6 @@ func (self *InfiniteByteSliceChan) start() {
 }
 
 func (self *InfiniteByteSliceChan) Stop() {
-  self.buffer = nil
   close(self.stop)
 }
 
@@ -150,7 +103,7 @@ func (self *InfiniteByteSliceChan) Stop() {
 type InfiniteTCPConnChan struct {
   In chan *net.TCPConn
   Out chan *net.TCPConn
-  buffer []*net.TCPConn
+  buffer *list.List
   stop chan struct{}
 }
 
@@ -158,7 +111,7 @@ func NewInfiniteTCPConnChan() *InfiniteTCPConnChan {
   self := &InfiniteTCPConnChan{
     In: make(chan *net.TCPConn),
     Out: make(chan *net.TCPConn),
-    buffer: make([]*net.TCPConn, 0, INITIAL_BUF_CAPACITY),
+    buffer: list.New(),
     stop: make(chan struct{}),
   }
   go self.start()
@@ -167,19 +120,21 @@ func NewInfiniteTCPConnChan() *InfiniteTCPConnChan {
 
 func (self *InfiniteTCPConnChan) start() {
   for {
-    if len(self.buffer) > 0 {
+    if self.buffer.Len() > 0 {
+      elem := self.buffer.Back()
+      value := elem.Value.(*net.TCPConn)
       select {
-      case self.Out <- self.buffer[0]:
-        self.buffer = self.buffer[1:]
+      case self.Out <- value:
+        self.buffer.Remove(elem)
       case value := <-self.In:
-        self.buffer = append(self.buffer, value)
+        self.buffer.PushFront(value)
       case <-self.stop:
         return
       }
     } else {
       select {
       case value := <-self.In:
-        self.buffer = append(self.buffer, value)
+        self.buffer.PushFront(value)
       case <-self.stop:
         return
       }
@@ -188,7 +143,6 @@ func (self *InfiniteTCPConnChan) start() {
 }
 
 func (self *InfiniteTCPConnChan) Stop() {
-  self.buffer = nil
   close(self.stop)
 }
 
@@ -196,7 +150,7 @@ func (self *InfiniteTCPConnChan) Stop() {
 type InfiniteSessionChan struct {
   In chan *Session
   Out chan *Session
-  buffer []*Session
+  buffer *list.List
   stop chan struct{}
 }
 
@@ -204,7 +158,7 @@ func NewInfiniteSessionChan() *InfiniteSessionChan {
   self := &InfiniteSessionChan{
     In: make(chan *Session),
     Out: make(chan *Session),
-    buffer: make([]*Session, 0, INITIAL_BUF_CAPACITY),
+    buffer: list.New(),
     stop: make(chan struct{}),
   }
   go self.start()
@@ -215,7 +169,7 @@ func NewInfiniteSessionChanWithOutChan(out chan *Session) *InfiniteSessionChan {
   self := &InfiniteSessionChan{
     In: make(chan *Session),
     Out: out,
-    buffer: make([]*Session, 0, INITIAL_BUF_CAPACITY),
+    buffer: list.New(),
     stop: make(chan struct{}),
   }
   go self.start()
@@ -224,19 +178,21 @@ func NewInfiniteSessionChanWithOutChan(out chan *Session) *InfiniteSessionChan {
 
 func (self *InfiniteSessionChan) start() {
   for {
-    if len(self.buffer) > 0 {
+    if self.buffer.Len() > 0 {
+      elem := self.buffer.Back()
+      value := elem.Value.(*Session)
       select {
-      case self.Out <- self.buffer[0]:
-        self.buffer = self.buffer[1:]
+      case self.Out <- value:
+        self.buffer.Remove(elem)
       case value := <-self.In:
-        self.buffer = append(self.buffer, value)
+        self.buffer.PushFront(value)
       case <-self.stop:
         return
       }
     } else {
       select {
       case value := <-self.In:
-        self.buffer = append(self.buffer, value)
+        self.buffer.PushFront(value)
       case <-self.stop:
         return
       }
@@ -245,7 +201,6 @@ func (self *InfiniteSessionChan) start() {
 }
 
 func (self *InfiniteSessionChan) Stop() {
-  self.buffer = nil
   close(self.stop)
 }
 
@@ -253,7 +208,7 @@ func (self *InfiniteSessionChan) Stop() {
 type InfiniteConnPoolChan struct {
   In chan *ConnPool
   Out chan *ConnPool
-  buffer []*ConnPool
+  buffer *list.List
   stop chan struct{}
 }
 
@@ -261,7 +216,7 @@ func NewInfiniteConnPoolChan() *InfiniteConnPoolChan {
   self := &InfiniteConnPoolChan{
     In: make(chan *ConnPool),
     Out: make(chan *ConnPool),
-    buffer: make([]*ConnPool, 0, INITIAL_BUF_CAPACITY),
+    buffer: list.New(),
     stop: make(chan struct{}),
   }
   go self.start()
@@ -270,19 +225,21 @@ func NewInfiniteConnPoolChan() *InfiniteConnPoolChan {
 
 func (self *InfiniteConnPoolChan) start() {
   for {
-    if len(self.buffer) > 0 {
+    if self.buffer.Len() > 0 {
+      elem := self.buffer.Back()
+      value := elem.Value.(*ConnPool)
       select {
-      case self.Out <- self.buffer[0]:
-        self.buffer = self.buffer[1:]
+      case self.Out <- value:
+        self.buffer.Remove(elem)
       case value := <-self.In:
-        self.buffer = append(self.buffer, value)
+        self.buffer.PushFront(value)
       case <-self.stop:
         return
       }
     } else {
       select {
       case value := <-self.In:
-        self.buffer = append(self.buffer, value)
+        self.buffer.PushFront(value)
       case <-self.stop:
         return
       }
@@ -291,7 +248,6 @@ func (self *InfiniteConnPoolChan) start() {
 }
 
 func (self *InfiniteConnPoolChan) Stop() {
-  self.buffer = nil
   close(self.stop)
 }
 
@@ -299,7 +255,7 @@ func (self *InfiniteConnPoolChan) Stop() {
 type InfiniteConnChan struct {
   In chan *Conn
   Out chan *Conn
-  buffer []*Conn
+  buffer *list.List
   stop chan struct{}
 }
 
@@ -307,7 +263,7 @@ func NewInfiniteConnChan() *InfiniteConnChan {
   self := &InfiniteConnChan{
     In: make(chan *Conn),
     Out: make(chan *Conn),
-    buffer: make([]*Conn, 0, INITIAL_BUF_CAPACITY),
+    buffer: list.New(),
     stop: make(chan struct{}),
   }
   go self.start()
@@ -316,19 +272,21 @@ func NewInfiniteConnChan() *InfiniteConnChan {
 
 func (self *InfiniteConnChan) start() {
   for {
-    if len(self.buffer) > 0 {
+    if self.buffer.Len() > 0 {
+      elem := self.buffer.Back()
+      value := elem.Value.(*Conn)
       select {
-      case self.Out <- self.buffer[0]:
-        self.buffer = self.buffer[1:]
+      case self.Out <- value:
+        self.buffer.Remove(elem)
       case value := <-self.In:
-        self.buffer = append(self.buffer, value)
+        self.buffer.PushFront(value)
       case <-self.stop:
         return
       }
     } else {
       select {
       case value := <-self.In:
-        self.buffer = append(self.buffer, value)
+        self.buffer.PushFront(value)
       case <-self.stop:
         return
       }
@@ -337,7 +295,6 @@ func (self *InfiniteConnChan) start() {
 }
 
 func (self *InfiniteConnChan) Stop() {
-  self.buffer = nil
   close(self.stop)
 }
 
@@ -345,7 +302,7 @@ func (self *InfiniteConnChan) Stop() {
 type InfiniteToSendChan struct {
   In chan ToSend
   Out chan ToSend
-  buffer []ToSend
+  buffer *list.List
   stop chan struct{}
 }
 
@@ -353,7 +310,7 @@ func NewInfiniteToSendChan() *InfiniteToSendChan {
   self := &InfiniteToSendChan{
     In: make(chan ToSend),
     Out: make(chan ToSend),
-    buffer: make([]ToSend, 0, INITIAL_BUF_CAPACITY),
+    buffer: list.New(),
     stop: make(chan struct{}),
   }
   go self.start()
@@ -362,19 +319,21 @@ func NewInfiniteToSendChan() *InfiniteToSendChan {
 
 func (self *InfiniteToSendChan) start() {
   for {
-    if len(self.buffer) > 0 {
+    if self.buffer.Len() > 0 {
+      elem := self.buffer.Back()
+      value := elem.Value.(ToSend)
       select {
-      case self.Out <- self.buffer[0]:
-        self.buffer = self.buffer[1:]
+      case self.Out <- value:
+        self.buffer.Remove(elem)
       case value := <-self.In:
-        self.buffer = append(self.buffer, value)
+        self.buffer.PushFront(value)
       case <-self.stop:
         return
       }
     } else {
       select {
       case value := <-self.In:
-        self.buffer = append(self.buffer, value)
+        self.buffer.PushBack(value)
       case <-self.stop:
         return
       }
@@ -383,7 +342,5 @@ func (self *InfiniteToSendChan) start() {
 }
 
 func (self *InfiniteToSendChan) Stop() {
-  self.buffer = nil
   close(self.stop)
 }
-
