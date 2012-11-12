@@ -224,7 +224,7 @@ func (self *Session) handleDataPacket(data []byte) {
   if serial > self.maxIncomingSerial {
     self.maxIncomingSerial = serial
   }
-  for len(*(self.packetQueue)) > 0 {
+  for self.packetQueue.Len() > 0 {
     next := heap.Pop(self.packetQueue).(*Packet)
     if next.serial == self.incomingSerial {
       self.pushData(*next)
