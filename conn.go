@@ -14,6 +14,9 @@ type Conn struct {
   pool *ConnPool
   in chan []byte
   stop chan struct{}
+
+  bytesReadCollect *InfiniteUint64Chan
+  bytesSentCollect *InfiniteUint64Chan
 }
 
 func newConn(conn *net.TCPConn, connPool *ConnPool) *Conn {
@@ -39,6 +42,9 @@ func (self *Conn) startReadChan() {
       return
     }
     self.in <- data
+    if self.bytesReadCollect != nil {
+      self.bytesReadCollect.In <- uint64(len(data))
+    }
   }
 }
 
@@ -130,11 +136,14 @@ func (self *Conn) handleSend(toSend ToSend) error {
   if toSend.tag == DATA && toSend.session.remoteReadState == ABORT {
     return nil
   }
-  err := writeFrame(self.conn,
-    assembleSessionPacket(toSend.session.id, toSend.data, self.pool.byteKeys, self.pool.uint64Keys))
+  payload := assembleSessionPacket(toSend.session.id, toSend.data, self.pool.byteKeys, self.pool.uint64Keys)
+  err := writeFrame(self.conn, payload)
   if err != nil {
     self.pool.sendQueue.In <- toSend
     return err
+  }
+  if self.bytesSentCollect != nil {
+    self.bytesSentCollect.In <- uint64(len(payload))
   }
   return nil
 }
@@ -145,11 +154,20 @@ func (self *Conn) handleRawSend(data []byte) error {
     self.pool.rawSendQueue.In <- data
     return err
   }
+  if self.bytesSentCollect != nil {
+    self.bytesSentCollect.In <- uint64(len(data))
+  }
   return nil
 }
 
-func (self *Conn) ping() error {
-  return writeFrame(self.conn, []byte{PACKET_TYPE_PING})
+func (self *Conn) ping() (err error) {
+  err = writeFrame(self.conn, []byte{PACKET_TYPE_PING})
+  if err != nil {
+    if self.bytesSentCollect != nil {
+      self.bytesSentCollect.In <- uint64(1)
+    }
+  }
+  return
 }
 
 func (self *Conn) Stop() {

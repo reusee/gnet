@@ -30,6 +30,9 @@ type ConnPool struct {
   maxConnNum int
 
   closed bool
+
+  bytesReadCollect *InfiniteUint64Chan
+  bytesSentCollect *InfiniteUint64Chan
 }
 
 func newConnPool(key string, newSessionChan *chan *Session) *ConnPool {
@@ -66,6 +69,8 @@ func (self *ConnPool) start() {
     select {
     case tcpConn := <-self.newConnChan.Out:
       conn := newConn(tcpConn, self)
+      conn.bytesReadCollect = self.bytesReadCollect
+      conn.bytesSentCollect = self.bytesSentCollect
       self.conns[conn.id] = conn
       if len(self.conns) > self.maxConnNum {
         self.maxConnNum = len(self.conns)

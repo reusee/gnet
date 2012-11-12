@@ -106,13 +106,19 @@ func TestSessionFinish(t *testing.T) {
   if err != nil {
     t.Fatal(err)
   }
-  defer server.Stop()
+  defer func() {
+    p("server sent %d bytes, read %d bytes\n", server.BytesSent, server.BytesRead)
+    server.Stop()
+  }()
 
   client, err := NewClient("localhost:8710", "abc", 1)
   if err != nil {
     t.Fatal(err)
   }
-  defer client.Stop()
+  defer func() {
+    p("client sent %d bytes, read %d bytes\n", client.BytesSent, client.BytesRead)
+    client.Stop()
+  }()
 
   clientSession := client.NewSession()
 

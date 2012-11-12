@@ -24,6 +24,11 @@ type Client struct {
 
   deadConnNotify *InfiniteBoolChan
   connPoolStopNotify *InfiniteConnPoolChan
+
+  BytesRead uint64
+  bytesReadCollect *InfiniteUint64Chan
+  BytesSent uint64
+  bytesSentCollect *InfiniteUint64Chan
 }
 
 func NewClient(addr string, key string, conns int) (*Client, error) {
@@ -41,9 +46,14 @@ func NewClient(addr string, key string, conns int) (*Client, error) {
 
     deadConnNotify: NewInfiniteBoolChan(),
     connPoolStopNotify: NewInfiniteConnPoolChan(),
+
+    bytesReadCollect: NewInfiniteUint64Chan(),
+    bytesSentCollect: NewInfiniteUint64Chan(),
   }
   self.connPool.deadConnNotify = self.deadConnNotify
   self.connPool.stopNotify = self.connPoolStopNotify.In
+  self.connPool.bytesReadCollect = self.bytesReadCollect
+  self.connPool.bytesSentCollect = self.bytesSentCollect
 
   err = self.connect(conns)
   if err != nil {
@@ -72,6 +82,10 @@ func (self *Client) start() {
     case <-self.connPoolStopNotify.Out:
       self.log("lost connection to server")
       break LOOP
+    case c := <-self.bytesReadCollect.Out:
+      self.BytesRead += c
+    case c := <-self.bytesSentCollect.Out:
+      self.BytesSent += c
     case <-self.end:
       break LOOP
     }
@@ -83,6 +97,8 @@ func (self *Client) start() {
   self.connPool.Stop()
   self.deadConnNotify.Stop()
   self.connPoolStopNotify.Stop()
+  self.bytesReadCollect.Stop()
+  self.bytesSentCollect.Stop()
 }
 
 func (self *Client) Stop() {

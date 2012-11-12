@@ -15,6 +15,11 @@ type Server struct {
   newConnChan *InfiniteTCPConnChan
   stop chan struct{}
   connPoolStopNotify *InfiniteConnPoolChan
+
+  BytesRead uint64
+  bytesReadCollect *InfiniteUint64Chan
+  BytesSent uint64
+  bytesSentCollect *InfiniteUint64Chan
 }
 
 func NewServer(addr string, key string) (*Server, error) {
@@ -35,6 +40,9 @@ func NewServer(addr string, key string) (*Server, error) {
     newConnChan: NewInfiniteTCPConnChan(),
     stop: make(chan struct{}),
     connPoolStopNotify: NewInfiniteConnPoolChan(),
+
+    bytesReadCollect: NewInfiniteUint64Chan(),
+    bytesSentCollect: NewInfiniteUint64Chan(),
   }
   self.newSessionBuffer = NewInfiniteSessionChanWithOutChan(self.New)
 
@@ -75,6 +83,8 @@ func (self *Server) start(key string) {
         connPool := newConnPool(key, &(self.newSessionBuffer.In))
         connPool.clientId = clientId
         connPool.stopNotify = self.connPoolStopNotify.In
+        connPool.bytesReadCollect = self.bytesReadCollect
+        connPool.bytesSentCollect = self.bytesSentCollect
         self.connPools[clientId] = connPool
       }
       self.connPools[clientId].newConnChan.In <- conn
@@ -85,6 +95,12 @@ func (self *Server) start(key string) {
     case connPool := <-self.connPoolStopNotify.Out:
       self.log("conn pool for client %d stop", connPool.clientId)
       delete(self.connPools, connPool.clientId)
+
+    case c := <-self.bytesReadCollect.Out:
+      self.BytesRead += c
+
+    case c := <-self.bytesSentCollect.Out:
+      self.BytesSent += c
 
     case <-self.stop:
       break LOOP
@@ -100,6 +116,8 @@ func (self *Server) start(key string) {
   self.newSessionBuffer.Stop()
   self.newConnChan.Stop()
   self.connPoolStopNotify.Stop()
+  self.bytesReadCollect.Stop()
+  self.bytesSentCollect.Stop()
 }
 
 func (self *Server) Stop() {

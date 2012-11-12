@@ -344,3 +344,51 @@ func (self *InfiniteToSendChan) start() {
 func (self *InfiniteToSendChan) Stop() {
   close(self.stop)
 }
+
+// uint64
+type InfiniteUint64Chan struct {
+  In chan uint64
+  Out chan uint64
+  buffer *list.List
+  stop chan struct{}
+}
+
+func NewInfiniteUint64Chan() *InfiniteUint64Chan {
+  self := &InfiniteUint64Chan{
+    In: make(chan uint64),
+    Out: make(chan uint64),
+    buffer: list.New(),
+    stop: make(chan struct{}),
+  }
+  go self.start()
+  return self
+}
+
+func (self *InfiniteUint64Chan) start() {
+  for {
+    if self.buffer.Len() > 0 {
+      elem := self.buffer.Back()
+      value := elem.Value.(uint64)
+      select {
+      case self.Out <- value:
+        self.buffer.Remove(elem)
+      case value := <-self.In:
+        self.buffer.PushFront(value)
+      case <-self.stop:
+        return
+      }
+    } else {
+      select {
+      case value := <-self.In:
+        self.buffer.PushBack(value)
+      case <-self.stop:
+        return
+      }
+    }
+  }
+}
+
+func (self *InfiniteUint64Chan) Stop() {
+  close(self.stop)
+}
+
