@@ -14,7 +14,7 @@ func init() {
 
 type Client struct {
   id uint64
-  end chan struct{}
+  stop chan struct{}
   connPool *ConnPool
   conns int
   Closed bool
@@ -39,7 +39,7 @@ func NewClient(addr string, key string, conns int) (*Client, error) {
 
   self := &Client{
     id: uint64(rand.Int63()),
-    end: make(chan struct{}),
+    stop: make(chan struct{}),
     connPool: newConnPool(key, nil),
     conns: conns,
     raddr: raddr,
@@ -86,7 +86,7 @@ func (self *Client) start() {
       self.BytesRead += c
     case c := <-self.bytesSentCollect.Out:
       self.BytesSent += c
-    case <-self.end:
+    case <-self.stop:
       break LOOP
     }
     tick++
@@ -102,7 +102,7 @@ func (self *Client) start() {
 }
 
 func (self *Client) Stop() {
-  close(self.end)
+  close(self.stop)
 }
 
 func (self *Client) checkConns() {
