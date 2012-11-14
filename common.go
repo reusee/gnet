@@ -2,6 +2,7 @@ package gnet
 
 import (
   "fmt"
+  "runtime"
 )
 
 var DEBUG = false // if you want to debug, set this to true in a file contains an init function
@@ -42,4 +43,12 @@ func ps(f string, vars ...interface{}) string {
 
 func colorp(color string, s string, vars... interface{}) {
   println("\033[" + color + "m" + fmt.Sprintf(s, vars...) + "\033[0m")
+}
+
+func mem() string {
+  runtime.GC()
+  var stats runtime.MemStats
+  runtime.ReadMemStats(&stats)
+  return ps("inuse %d idle %d objects %d gc %d",
+    stats.HeapInuse, stats.HeapIdle, stats.HeapObjects, stats.NumGC)
 }
