@@ -24,10 +24,10 @@ type Session struct {
   infoChan *InfiniteToSendChan
   //packets map[uint32][]byte
 
-  readState int // for session cleaner
-  sendState int // for session cleaner
-  remoteReadState int // for Send() and conn writer
-  remoteSendState int // 
+  readState int
+  sendState int
+  remoteReadState int
+  remoteSendState int
   remoteReadFinishAt uint32
   remoteSendFinishAt uint32
 
@@ -46,6 +46,11 @@ type Session struct {
   lastRemoteMaxSerial uint32
 
   C *InfiniteByteSliceChan
+
+  BytesRead uint64
+  BytesSent uint64
+  RemoteBytesRead uint64
+  RemoteBytesSent uint64
 
   stopNotify *InfiniteSessionChan
 }
@@ -161,6 +166,9 @@ func (self *Session) sendInfo() {
   binary.Write(buf, binary.BigEndian, cur) // current waiting serial
   binary.Write(buf, binary.BigEndian, max) // max received serial
 
+  binary.Write(buf, binary.BigEndian, self.BytesRead)
+  binary.Write(buf, binary.BigEndian, self.BytesSent)
+
   self.infoChan.In <- ToSend{INFO, self, buf.Bytes()}
 }
 
@@ -251,6 +259,7 @@ func (self *Session) pushData(packet Packet) {
     self.readState = FINISH
     self.pushState(STATE_ABORT_SEND)
   }
+  atomic.AddUint64(&self.BytesRead, uint64(len(packet.data)))
 }
 
 func (self *Session) pushState(state byte) {
@@ -314,6 +323,9 @@ func (self *Session) handleInfoPacket(data []byte) {
   //  self.sendQueue.In <- ToSend{INFO, self, self.packets[curSerial]}
   //}
 
+  binary.Read(reader, binary.BigEndian, &self.RemoteBytesRead)
+  binary.Read(reader, binary.BigEndian, &self.RemoteBytesSent)
+
   self.lastRemoteHeartbeatTime = timestamp
   self.lastRemoteHeartbeatTimeLocal = uint32(time.Now().Unix())
   self.lastRemoteCurSerial = curSerial
@@ -346,6 +358,7 @@ func (self *Session) Send(data []byte) int {
     return ABORT
   }
   self.sendQueue.In <- ToSend{DATA, self, self.packData(data)}
+  atomic.AddUint64(&self.BytesSent, uint64(len(data)))
   return NORMAL
 }
 
