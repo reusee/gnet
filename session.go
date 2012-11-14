@@ -169,6 +169,8 @@ func (self *Session) sendInfo() {
   binary.Write(buf, binary.BigEndian, self.BytesRead)
   binary.Write(buf, binary.BigEndian, self.BytesSent)
 
+  // remember to modify entryLen in conn.go
+
   self.infoChan.In <- ToSend{INFO, self, buf.Bytes()}
 }
 

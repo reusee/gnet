@@ -119,7 +119,7 @@ func (self *Conn) handleSessionPacket(packet []byte) {
 func (self *Conn) handleInfoPacket(packet []byte) {
   var sessionId uint64
   //
-  entryLen := 21
+  entryLen := 37
   entryNum := int(len(packet) / entryLen)
   for i := 0; i < entryNum; i++ {
     binary.Read(bytes.NewReader(packet[i * entryLen : i * entryLen + 8]), binary.BigEndian, &sessionId)
