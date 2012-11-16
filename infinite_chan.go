@@ -50,6 +50,14 @@ func (self *InfiniteBoolChan) start() {
 
 func (self *InfiniteBoolChan) Stop() {
   close(self.stop)
+  for {
+    select {
+    case <-self.In:
+      continue
+    default:
+      return
+    }
+  }
 }
 
 // []byte
@@ -97,6 +105,14 @@ func (self *InfiniteByteSliceChan) start() {
 
 func (self *InfiniteByteSliceChan) Stop() {
   close(self.stop)
+  for {
+    select {
+    case <-self.In:
+      continue
+    default:
+      return
+    }
+  }
 }
 
 // *net.TCPConn
@@ -144,6 +160,14 @@ func (self *InfiniteTCPConnChan) start() {
 
 func (self *InfiniteTCPConnChan) Stop() {
   close(self.stop)
+  for {
+    select {
+    case <-self.In:
+      continue
+    default:
+      return
+    }
+  }
 }
 
 // *Session
@@ -202,6 +226,14 @@ func (self *InfiniteSessionChan) start() {
 
 func (self *InfiniteSessionChan) Stop() {
   close(self.stop)
+  for {
+    select {
+    case <-self.In:
+      continue
+    default:
+      return
+    }
+  }
 }
 
 // *ConnPool
@@ -249,6 +281,14 @@ func (self *InfiniteConnPoolChan) start() {
 
 func (self *InfiniteConnPoolChan) Stop() {
   close(self.stop)
+  for {
+    select {
+    case <-self.In:
+      continue
+    default:
+      return
+    }
+  }
 }
 
 // *Conn
@@ -296,6 +336,14 @@ func (self *InfiniteConnChan) start() {
 
 func (self *InfiniteConnChan) Stop() {
   close(self.stop)
+  for {
+    select {
+    case <-self.In:
+      continue
+    default:
+      return
+    }
+  }
 }
 
 // ToSend
@@ -343,6 +391,14 @@ func (self *InfiniteToSendChan) start() {
 
 func (self *InfiniteToSendChan) Stop() {
   close(self.stop)
+  for {
+    select {
+    case <-self.In:
+      continue
+    default:
+      return
+    }
+  }
 }
 
 // uint64
@@ -390,5 +446,13 @@ func (self *InfiniteUint64Chan) start() {
 
 func (self *InfiniteUint64Chan) Stop() {
   close(self.stop)
+  for {
+    select {
+    case <-self.In:
+      continue
+    default:
+      return
+    }
+  }
 }
 
