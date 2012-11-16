@@ -16,6 +16,7 @@ type Session struct {
   serial uint32
   closed bool
   stopOnce sync.Once
+  Stopped chan struct{}
 
   incomingSerial uint32
   maxIncomingSerial uint32
@@ -65,6 +66,7 @@ func newSession(id uint64, connPool *ConnPool) *Session {
   self := &Session{
     stop: make(chan struct{}),
     id: id,
+    Stopped: make(chan struct{}),
 
     incomingSerial: 1,
     incomingChan: NewInfiniteByteSliceChan(),
@@ -107,8 +109,12 @@ func (self *Session) start() {
     case <-heartBeat:
       self.showInfo()
       self.sendInfo()
-      self.checkState()
-      self.checkRemoteConnectivity()
+      if quit := self.checkState(); quit {
+        break LOOP
+      }
+      if quit := self.checkRemoteConnectivity(); quit {
+        break LOOP
+      }
       //self.log("tick %d", tick)
     case <-self.stop:
       break LOOP
@@ -121,9 +127,11 @@ func (self *Session) start() {
   self.pushState(STATE_STOP)
   self.incomingChan.Stop()
   self.C.Stop()
+  close(self.stopDeliver)
   if self.stopNotify != nil {
     self.stopNotify.In <- self
   }
+  close(self.Stopped)
 }
 
 func (self *Session) startMessageDeliver() {
@@ -174,22 +182,24 @@ func (self *Session) sendInfo() {
   self.infoChan.In <- ToSend{INFO, self, buf.Bytes()}
 }
 
-func (self *Session) checkState() {
+func (self *Session) checkState() bool {
   if self.sendState == FINISH || self.sendState == ABORT {
     if self.readState == FINISH || self.readState == ABORT {
       self.log("finish/abort read/send, stop")
-      self.Stop()
+      return true
     }
   }
+  return false
 }
 
-func (self *Session) checkRemoteConnectivity() {
+func (self *Session) checkRemoteConnectivity() bool {
   if self.lastRemoteHeartbeatTimeLocal > 0 {
-    if uint32(time.Now().Unix()) - self.lastRemoteHeartbeatTimeLocal > 60 {
+    if uint32(time.Now().Unix()) - self.lastRemoteHeartbeatTimeLocal > 10 {
       self.log("remote session lost, stop")
-      self.Stop()
+      return true
     }
   }
+  return false
 }
 
 func (self *Session) handleIncoming(packet []byte) {
@@ -356,6 +366,9 @@ func (self *Session) packState(state byte, extra []byte) []byte {
 }
 
 func (self *Session) Send(data []byte) int {
+  if self.closed {
+    return ABORT
+  }
   if self.remoteReadState == ABORT {
     return ABORT
   }
@@ -403,6 +416,7 @@ func (self *Session) Stop() {
     self.closed = true
     close(self.stop)
   })
+  <-self.Stopped
 }
 
 func (self *Session) log(f string, vars ...interface{}) {
