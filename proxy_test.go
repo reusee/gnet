@@ -21,14 +21,17 @@ func TestProxyTCP(t *testing.T) {
       t.Fatalf("tcp echo server listen error %v", err)
     }
     for {
-      conn, _ := ln.Accept()
+      conn, err := ln.Accept()
+      if err != nil {
+        continue
+      }
       go func() {
         for {
           buf := make([]byte, bufSize)
           n, err := conn.Read(buf)
           if err != nil {
             conn.Close()
-            break
+            return
           }
           conn.Write(buf[:n])
         }
@@ -68,7 +71,10 @@ func TestProxyTCP(t *testing.T) {
     }
     close(init)
     for {
-      conn, _ := ln.AcceptTCP()
+      conn, err := ln.AcceptTCP()
+      if err != nil {
+        continue
+      }
       go func() {
         session := client.NewSession()
         session.ProxyTCP(conn, bufSize)
@@ -78,12 +84,12 @@ func TestProxyTCP(t *testing.T) {
   <-init
 
   // echo client
-  for i := 0; i < 1000; i++ {
+  for i := 0; i < 300; i++ {
     conn, err := net.DialTCP("tcp", nil, proxyServerAddr)
     if err != nil {
       t.Fatalf("echo client dial error %v", err)
     }
-    data := bytes.Repeat([]byte(fmt.Sprintf("%d", rand.Int63())), rand.Intn(50) + 1)
+    data := bytes.Repeat([]byte(fmt.Sprintf("%d", i)), rand.Intn(50) + 1)
     conn.Write(data)
     fmt.Printf("sent %s\n", data)
     buf := make([]byte, bufSize)
