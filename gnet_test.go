@@ -140,7 +140,8 @@ func TestSessionFinish(t *testing.T) {
     }
   }()
 
-  for i := 0; i < 200; i++ {
+  n := 2000
+  for i := 0; i < n; i++ {
     clientSession.Send([]byte(fmt.Sprintf("%d", i)))
   }
   var data []byte
@@ -157,5 +158,8 @@ func TestSessionFinish(t *testing.T) {
         return
       }
     }
+  }
+  if !bytes.Equal(data, []byte(fmt.Sprintf("%d", n - 1))) {
+    t.Fail()
   }
 }

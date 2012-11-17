@@ -101,6 +101,7 @@ func (self *ConnPool) start() {
       delete(self.conns, conn.id)
 
     case session := <-self.sessionStopNotify.Out:
+      self.log("delete session %d", session.id)
       delete(self.sessions, session.id)
 
     case <-self.stop:
