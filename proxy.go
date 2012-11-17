@@ -2,6 +2,7 @@ package gnet
 
 import (
   "net"
+  "sync"
 )
 
 func (self *Session) ProxyTCP(conn *net.TCPConn, bufferSize int) {
@@ -15,6 +16,7 @@ func (self *Session) ProxyTCP(conn *net.TCPConn, bufferSize int) {
   }()
   // to conn
   go func() {
+    var once sync.Once
     for {
       select {
       case msg := <-self.Message:
@@ -25,7 +27,9 @@ func (self *Session) ProxyTCP(conn *net.TCPConn, bufferSize int) {
           switch msg.State {
           case STATE_FINISH_SEND, STATE_ABORT_SEND:
             conn.CloseWrite()
-            close(writeClosed)
+            once.Do(func() {
+              close(writeClosed)
+            })
           case STATE_ABORT_READ:
           case STATE_FINISH_READ:
           }
