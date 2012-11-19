@@ -109,6 +109,9 @@ func (self *Conn) handleSessionPacket(packet []byte) {
   session := self.pool.sessions[sessionId]
   if session == nil {
     session = self.pool.newSession(sessionId)
+    if session == nil { // session already closed
+      return
+    }
   }
   if session.closed {
     return

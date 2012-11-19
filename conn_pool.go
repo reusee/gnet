@@ -25,6 +25,8 @@ type ConnPool struct {
   sessions map[uint64]*Session
   newSessionChan *chan *Session
   sessionStopNotify *InfiniteSessionChan
+  newSessionRequest chan newSessionReq
+  stoppedSessions map[uint64]bool
 
   conns map[uint64]*Conn
   maxConnNum int
@@ -33,6 +35,11 @@ type ConnPool struct {
 
   bytesReadCollect *InfiniteUint64Chan
   bytesSentCollect *InfiniteUint64Chan
+}
+
+type newSessionReq struct {
+  ret chan *Session
+  sessionId uint64
 }
 
 func newConnPool(key string, newSessionChan *chan *Session) *ConnPool {
@@ -48,6 +55,8 @@ func newConnPool(key string, newSessionChan *chan *Session) *ConnPool {
     sessions: make(map[uint64]*Session),
     newSessionChan: newSessionChan,
     sessionStopNotify: NewInfiniteSessionChan(),
+    newSessionRequest: make(chan newSessionReq),
+    stoppedSessions: make(map[uint64]bool),
 
     conns: make(map[uint64]*Conn),
   }
@@ -103,6 +112,10 @@ func (self *ConnPool) start() {
     case session := <-self.sessionStopNotify.Out:
       self.log("delete session %d", session.id)
       delete(self.sessions, session.id)
+      self.stoppedSessions[session.id] = true
+
+    case req := <-self.newSessionRequest:
+      self.handleNewSessionRequest(req)
 
     case <-self.stop:
       break LOOP
@@ -122,6 +135,7 @@ func (self *ConnPool) start() {
   for serial, session := range self.sessions {
     session.Stop()
     delete(self.sessions, serial)
+    self.stoppedSessions[serial] = true
   }
   // notify 
   if self.stopNotify != nil {
@@ -137,6 +151,17 @@ func (self *ConnPool) start() {
 }
 
 func (self *ConnPool) newSession(sessionId uint64) *Session {
+  ret := make(chan *Session)
+  self.newSessionRequest <- newSessionReq{ret, sessionId}
+  return <-ret
+}
+
+func (self *ConnPool) handleNewSessionRequest(req newSessionReq) {
+  sessionId, ret := req.sessionId, req.ret
+  if self.stoppedSessions[sessionId] { // session stopped, do not create a new one
+    ret <- nil
+    return
+  }
   session := newSession(sessionId, self)
   self.sessions[sessionId] = session
   session.stopNotify = self.sessionStopNotify
@@ -144,7 +169,7 @@ func (self *ConnPool) newSession(sessionId uint64) *Session {
   if self.newSessionChan != nil {
     *(self.newSessionChan) <- session
   }
-  return session
+  ret <- session
 }
 
 func (self *ConnPool) Stop() {
