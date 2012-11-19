@@ -23,7 +23,16 @@ func (self *Session) ProxyTCP(conn *net.TCPConn, bufferSize int) {
       case msg := <-self.Message:
         switch msg.Tag {
         case DATA:
-          conn.Write(msg.Data)
+          _, err := conn.Write(msg.Data)
+          if err != nil {
+            self.log("proxy write error %v", err)
+            go once.Do(func() {
+              <-time.After(time.Second * 5)
+              conn.CloseWrite()
+              close(writeClosed)
+            })
+            self.AbortRead()
+          }
         case STATE:
           switch msg.State {
           case STATE_FINISH_SEND, STATE_ABORT_SEND:
